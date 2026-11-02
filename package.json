@@ -1,0 +1,52 @@
+{
+  "name": "hearthis-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for hearthis.at - lets an AI assistant browse, upload, edit and message as your account (Premium members)",
+  "keywords": [
+    "mcp",
+    "hearthis",
+    "music",
+    "model-context-protocol",
+    "claude",
+    "dj-mixes"
+  ],
+  "homepage": "https://github.com/HearthisAt/hearthis-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/HearthisAt/hearthis-mcp/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HearthisAt/hearthis-mcp.git"
+  },
+  "license": "MIT",
+  "author": "hearthis.at (https://hearthis.at)",
+  "type": "module",
+  "bin": {
+    "hearthis-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepare": "tsc",
+    "start": "node dist/index.js",
+    "test": "tsc --noEmit",
+    "smoke": "node test/live-smoke.mjs",
+    "test:write": "node test/live-write.mjs",
+    "prepublishOnly": "tsc"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  }
+}
