@@ -25,6 +25,10 @@ const flag = z.boolean().optional();
 const iso = z.string().optional().describe('ISO 8601 with UTC offset, e.g. 2026-07-01T20:00:00+02:00');
 const trackPath = (a: string, t: string, action = '') => `/${authorSegment(a)}/${segment(t)}/${action ? action + '/' : ''}`;
 const bit = (value: boolean | undefined) => (value === undefined ? undefined : value ? 1 : 0);
+const invite = z.string().optional()
+  .describe('Invitation of a private group: its share link https://hearthis.at/group/{id}/{name}/{secret}/ or just the secret');
+/** The secret of an invitation link, or the secret itself. */
+const inviteSecret = (value: string | undefined) => (value ? value.replace(/[?#].*$/, '').split('/').filter(Boolean).pop() : undefined);
 
 const ANNOTATIONS: Record<ToolDef<Shape>['kind'], ToolAnnotations> = {
   read: { readOnlyHint: true, openWorldHint: true },
@@ -626,10 +630,11 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
 
   tool('get_group', {
     title: 'Group',
-    description: 'A group: info (metadata and own permissions), tracks (paged), members (owner first).',
-    input: { group_id: z.number().int(), part: z.enum(['info', 'tracks', 'members']).default('info'), page, count: count(50, 20) },
+    description: 'A group: info (metadata and own permissions), tracks (paged), members (owner first). A private group answers only its owner, its members and holders of its invitation link.',
+    input: { group_id: z.number().int(), part: z.enum(['info', 'tracks', 'members']).default('info'), page, count: count(50, 20), invite },
     kind: 'read',
-    run: ({ group_id, part, ...rest }) => api.get(`/group/${segment(group_id)}/${part === 'tracks' ? '' : part + '/'}`, part === 'info' ? {} : rest),
+    run: ({ group_id, part, invite: link, ...rest }) =>
+      api.get(`/group/${segment(group_id)}/${part === 'tracks' ? '' : part + '/'}`, { ...(part === 'info' ? {} : rest), s: inviteSecret(link) }),
   });
 
   tool('create_group', {
@@ -688,10 +693,10 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
 
   tool('join_group', {
     title: 'Join / leave group',
-    description: 'Joins a group (join=true) or leaves it (join=false). The owner cannot leave.',
-    input: { group_id: z.number().int(), join: z.boolean() },
+    description: 'Joins a group (join=true) or leaves it (join=false). The owner cannot leave. A private group can only be joined with its invitation link.',
+    input: { group_id: z.number().int(), join: z.boolean(), invite },
     kind: 'write',
-    run: ({ group_id, join }) => api.post(`/group/${segment(group_id)}/${join ? 'join' : 'leave'}/`),
+    run: ({ group_id, join, invite: link }) => api.post(`/group/${segment(group_id)}/${join ? 'join' : 'leave'}/`, { s: join ? inviteSecret(link) : undefined }),
   });
 
   tool('group_track', {
