@@ -630,7 +630,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
 
   tool('get_group', {
     title: 'Group',
-    description: 'A group: info (metadata and own permissions), tracks (paged), members (owner first). A private group answers only its owner, its members and holders of its invitation link.',
+    description: 'A group: info (metadata, own permissions and allowed_genres - the genre slugs members may add, empty for every genre), tracks (paged), members (owner first). A private group answers only its owner, its members and holders of its invitation link.',
     input: { group_id: z.number().int(), part: z.enum(['info', 'tracks', 'members']).default('info'), page, count: count(50, 20), invite },
     kind: 'read',
     run: ({ group_id, part, invite: link, ...rest }) =>
@@ -660,7 +660,8 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     title: 'Edit group',
     description:
       'Changes a group by the rules of its edit page - only the fields given change. Owner and editors; private only the owner. ' +
-      'member_notify=true mails the members about every new sound - only switch it on when the user asked.',
+      'member_notify=true mails the members about every new sound - only switch it on when the user asked. ' +
+      'allowed_genres limits what members may add; owner and editors can still add any sound, and sounds already in the group stay.',
     input: {
       group_id: z.number().int(),
       name: z.string().min(1).max(120).optional(),
@@ -674,9 +675,10 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       member_notify: flag.describe('Mail the members about new sounds'),
       sort: z.enum(['manual', 'alpha', 'random', 'plays']).optional(),
       editors: z.array(z.number().int()).optional().describe('User ids of the editors - replaces the list; owner only'),
+      allowed_genres: z.array(z.string().min(1)).optional().describe('Genre slugs (list_genres) members may add - replaces the list; [] accepts every genre again'),
     },
     kind: 'write',
-    run: ({ group_id, permalink, genre, private: priv, open, approve, notify, member_notify, sort, editors, ...rest }) =>
+    run: ({ group_id, permalink, genre, private: priv, open, approve, notify, member_notify, sort, editors, allowed_genres, ...rest }) =>
       api.post(`/group/${segment(group_id)}/edit/`, {
         ...rest,
         name_url: permalink,
@@ -688,6 +690,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
         member_notify: bit(member_notify),
         sort_config: sort ? { manual: 1, alpha: 2, random: 3, plays: 4 }[sort] : undefined,
         editors: editors ? editors.join(',') : undefined,
+        allowed_genres: allowed_genres ? allowed_genres.join(',') : undefined,
       }),
   });
 
@@ -701,7 +704,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
 
   tool('group_track', {
     title: 'Add / remove group track',
-    description: 'Adds a track to a group (add=true) or removes it (add=false). Owner, editors and the sound\'s author are published at once; others wait while the group asks for approval. Adding notifies the members and may mail the owner.',
+    description: 'Adds a track to a group (add=true) or removes it (add=false). Owner, editors and the sound\'s author are published at once; others wait while the group asks for approval. A group limited to genres refuses a member\'s sound of another genre (403, the answer names allowed_genres). Adding notifies the members and may mail the owner.',
     input: { group_id: z.number().int(), track_id: z.number().int(), add: z.boolean() },
     kind: 'write',
     run: ({ group_id, track_id, add }) => api.post(`/group/${segment(group_id)}/${add ? 'add' : 'remove'}/`, { track_id }),

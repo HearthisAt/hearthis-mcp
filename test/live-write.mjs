@@ -96,10 +96,12 @@ console.log('test track:', own.id, own.permalink, '(private)');
   check('set_listen_later removed again', !removed.some((track) => String(track.id) === String(foreign.id)));
 }
 
-// 4. add_to_set / remove_from_set: the private track into a private own set and out again
+// 4. add_to_set / remove_from_set: the private track into a private own set and out again. The smallest such set: a long
+// one comes back truncated (toText()), and a cut list is no JSON to look the track up in
 {
   const sets = await call('list_my_sets', { count: 50 });
-  const set = (Array.isArray(sets) ? sets : []).find((entry) => String(entry.privat) === '1' && String(entry.user_id) === String(me.id));
+  const set = (Array.isArray(sets) ? sets : []).filter((entry) => String(entry.privat) === '1' && String(entry.user_id) === String(me.id))
+    .sort((one, other) => Number(one.track_count ?? 0) - Number(other.track_count ?? 0))[0];
   if (!set) {
     check('private own set found', false);
   } else {
@@ -174,7 +176,33 @@ console.log('test track:', own.id, own.permalink, '(private)');
   }
 }
 
-// 8. Refusals that never reach the API
+// 8. edit_group: the accepted genres of a hidden own group set, an unknown genre refused, the list restored. Only a
+// group that is hidden and named "[audit] ..." - a list on a real group would turn its members' sounds away meanwhile.
+{
+  const groups = await call('list_groups', { type: 'user_groups', count: 50 });
+  const group = (Array.isArray(groups) ? groups : []).find((entry) => entry.viewer_is_owner === true && Number(entry.privat) === 1 && String(entry.title).startsWith('[audit]'));
+  if (!group) {
+    console.log('skip edit_group allowed_genres: no hidden own group named "[audit] ..."');
+  } else {
+    const info = () => call('get_group', { group_id: Number(group.id), part: 'info' });
+    const original = (await info()).allowed_genres ?? [];
+    try {
+      const saved = await call('edit_group', { group_id: Number(group.id), allowed_genres: ['techno', 'house'] });
+      check('edit_group set the accepted genres', JSON.stringify(saved.group?.allowed_genres) === '["house","techno"]', JSON.stringify(saved.group?.allowed_genres));
+      check('get_group names them', JSON.stringify((await info()).allowed_genres) === '["house","techno"]');
+      const invalid = await client.callTool({ name: 'edit_group', arguments: { group_id: Number(group.id), allowed_genres: ['no-such-genre-mcp'] } });
+      check('edit_group refuses an unknown genre', invalid.isError === true, (invalid.content?.[0]?.text ?? '').slice(0, 60));
+      await call('edit_group', { group_id: Number(group.id), allowed_genres: [] });
+      check('an empty list accepts every genre again', JSON.stringify((await info()).allowed_genres) === '[]');
+    } finally {
+      await call('edit_group', { group_id: Number(group.id), allowed_genres: original });
+    }
+    check('accepted genres restored', JSON.stringify((await info()).allowed_genres) === JSON.stringify(original));
+    check('group still hidden', Number((await info()).privat) === 1);
+  }
+}
+
+// 9. Refusals that never reach the API
 for (const [name, args] of [
   ['get_user', { author: 'login' }],
   ['set_track_cover', { track_id: Number(own.id), image_path: '/etc/passwd' }],

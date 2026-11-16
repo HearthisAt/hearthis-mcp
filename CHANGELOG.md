@@ -4,6 +4,8 @@
 
 - `get_group` and `join_group` take `invite`: the share link of a private group (or just its secret). hearthis.at now
   answers a private group only to its owner, its members and holders of that link, and lets nobody else join.
+- `edit_group` takes `allowed_genres`: the genres members may add to the group (an empty list accepts every genre
+  again). `get_group` names them in `info`, and `group_track` says why a sound of another genre is refused.
 
 ## 0.1.0
 
