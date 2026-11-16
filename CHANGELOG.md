@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 - `get_group` and `join_group` take `invite`: the share link of a private group (or just its secret). hearthis.at now
   answers a private group only to its owner, its members and holders of that link, and lets nobody else join.

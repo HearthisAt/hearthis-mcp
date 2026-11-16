@@ -1,6 +1,6 @@
 {
   "name": "hearthis-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for hearthis.at - lets an AI assistant browse, upload, edit and message as your account (Premium members)",
   "keywords": [
     "mcp",
