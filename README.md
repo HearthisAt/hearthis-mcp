@@ -46,6 +46,7 @@ key on save* and save. Every client with the old pair loses access; run `npx hea
 | Sets | `list_my_sets`, `get_set`, `add_to_set`, `edit_set`, `remove_from_set`, `delete_set` |
 | Groups | `list_groups`, `get_group`, `create_group`, `join_group`, `edit_group`, `group_track`, `group_approve`, `group_block`, `group_member_role`, `delete_group` |
 | Messages | `list_conversations`, `read_conversation`, `poll_messages`, `send_message`, `delete_conversation` |
+| Feeds | `list_feeds`, `add_feed`, `edit_feed`, `check_feed`, `remove_feed` |
 | Workflows | `list_workflows`, `create_workflow`, `edit_workflow`, `delete_workflow`, `order_workflows`, `test_workflow`, `apply_workflow`, `get_workflow_run`, `cancel_workflow_run`, `workflow_history`, `undo_workflow`, `list_control_tags`, `workflow_webhook` |
 
 Tools that delete, overwrite, undo or publish carry the MCP `destructiveHint`, so clients ask before running them;

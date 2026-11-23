@@ -964,4 +964,51 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     kind: 'read',
     run: ({ q }) => api.get('/my/control-tags/', { q }),
   });
+
+  // Feed sync (https://hearthis.at/imports/): podcast/RSS feeds that bring their new episodes in as sounds
+  const feedId = z.number().int().positive();
+  tool('list_feeds', {
+    title: 'Synced feeds',
+    description: 'The podcast/RSS feeds the account keeps in sync - looked at hourly: new episodes become sounds, a changed title or ' +
+      'description follows the feed unless the user changed it on hearthis.at. With feed_id one feed and its latest episodes.',
+    input: { feed_id: feedId.optional() },
+    kind: 'read',
+    run: ({ feed_id }) => api.get(feed_id ? `/my/feeds/${feed_id}/` : '/my/feeds/'),
+  });
+
+  tool('add_feed', {
+    title: 'Keep a feed in sync',
+    description: 'Keeps a podcast/RSS feed in sync (Premium, at most 3 per profile). start "new" (default): only episodes that appear later; "all": every ' +
+      'episode, a few per hour - episodes imported before are taken over, not imported twice. private: new episodes come in private. ' +
+      'Imported episodes are public unless private - ask before adding a feed with start "all".',
+    input: { url: z.string().url().max(500), private: z.boolean().optional(), start: z.enum(['new', 'all']).optional() },
+    kind: 'write',
+    run: ({ url, private: bolPrivate, start }) => api.post('/my/feeds/', { url, private: bit(bolPrivate), start }),
+  });
+
+  tool('edit_feed', {
+    title: 'Change a synced feed',
+    description: 'private: new episodes come in private; paused: true pauses the sync, false resumes it (also after errors).',
+    input: { feed_id: feedId, private: z.boolean().optional(), paused: z.boolean().optional() },
+    kind: 'write',
+    run: ({ feed_id, private: bolPrivate, paused }) => api.post(`/my/feeds/${feed_id}/`, {
+      private: bit(bolPrivate), paused: bit(paused),
+    }),
+  });
+
+  tool('check_feed', {
+    title: 'Check a feed now',
+    description: 'Looks at a synced feed now: notes new episodes and changed titles or descriptions; the episodes themselves come in with the next runs (every 5 minutes). Once every 5 minutes per feed.',
+    input: { feed_id: feedId },
+    kind: 'write',
+    run: ({ feed_id }) => api.post(`/my/feeds/${feed_id}/check/`),
+  });
+
+  tool('remove_feed', {
+    title: 'Stop syncing a feed',
+    description: 'Stops keeping the feed in sync. The sounds it brought stay.',
+    input: { feed_id: feedId },
+    kind: 'destructive',
+    run: ({ feed_id }) => api.post(`/my/feeds/${feed_id}/delete/`),
+  });
 }

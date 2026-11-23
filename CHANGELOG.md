@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Feed sync (https://hearthis.at/imports/): `list_feeds`, `add_feed`, `edit_feed`, `check_feed`, `remove_feed` - podcast and
+  SoundCloud feeds whose new episodes come in as sounds every hour; changed titles and descriptions follow the feed unless
+  the user changed them on hearthis.at. Premium, up to 3 feeds per profile.
+
 ## 0.3.0
 
 - Workflows (https://hearthis.at/workflows/): `list_workflows`, `create_workflow`, `edit_workflow`, `delete_workflow`,
