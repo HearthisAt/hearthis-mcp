@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>hearthis.at feed import test</title>
+    <link>https://github.com/HearthisAt/hearthis-mcp</link>
+    <description>Two tones of twenty seconds - a fixture for the feed import tests of hearthis.at. Not a podcast.</description>
+    <language>en</language>
+    <item>
+      <title>Feed import test - tone 660 Hz</title>
+      <guid isPermaLink="false">hearthis-feed-test-2</guid>
+      <description><![CDATA[Second test episode: a 660 Hz sine tone.]]></description>
+      <pubDate>Tue, 24 Nov 2026 10:00:00 +0000</pubDate>
+      <enclosure url="https://raw.githubusercontent.com/HearthisAt/hearthis-mcp/main/test/feed/episode-2.mp3" length="321036" type="audio/mpeg"/>
+      <itunes:keywords>test, tone</itunes:keywords>
+    </item>
+    <item>
+      <title>Feed import test - tone 440 Hz</title>
+      <guid isPermaLink="false">hearthis-feed-test-1</guid>
+      <description><![CDATA[First test episode: a 440 Hz sine tone.]]></description>
+      <pubDate>Mon, 23 Nov 2026 10:00:00 +0000</pubDate>
+      <enclosure url="https://raw.githubusercontent.com/HearthisAt/hearthis-mcp/main/test/feed/episode-1.mp3" length="321036" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>
