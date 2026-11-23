@@ -242,6 +242,10 @@ console.log('test track:', own.id, own.permalink, '(private)');
         await call('delete_workflow', { workflow_id: made.id });
       }
     }
+    const hook = await call('workflow_webhook', { action: 'show' });
+    check('workflow_webhook answers without the secret', hook.secret === undefined && hook.per_day === 500 && hook.secret_at === 'https://hearthis.at/workflows/', JSON.stringify(hook).slice(0, 100));
+    const webhookDraft = await call('test_workflow', { definition: { trigger: 'ready', actions: [{ type: 'webhook', value: 'https://example.com/hook' }] } });
+    check('a webhook is planned for new sounds only', webhookDraft.sounds?.[0]?.actions?.[0]?.reason === 'new_only', JSON.stringify(webhookDraft.sounds?.[0]?.actions?.[0]).slice(0, 100));
     const renamed = (await call('edit_workflow', { workflow_id: rule.id, name: 'MCP live test renamed' })).workflow;
     check('edit_workflow renamed it', renamed?.name === 'MCP live test renamed' && renamed?.state === 'off');
     const order = ((await call('list_workflows', {})).workflows ?? []).map((entry) => entry.id);
@@ -289,6 +293,8 @@ for (const [name, args] of [
   ['undo_workflow', {}],
   ['create_workflow', { name: 'x', definition: { trigger: 'ready', actions: [{ value: 'x' }] } }],
   ['get_workflow_run', { run_id: 0 }],
+  ['workflow_webhook', { action: 'test' }],
+  ['workflow_webhook', { action: 'test', url: 'http://example.com/hook' }],
 ]) {
   const result = await client.callTool({ name, arguments: args });
   check(`${name} refused locally`, result.isError === true, (result.content?.[0]?.text ?? '').slice(0, 60));

@@ -806,11 +806,12 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     'auto_tracklist, show_analysis, fans_only_play, fans_only_download, fans_only_tracklist, license, version_type, template, waveform_style, ' +
     'waveform_color, waveform_highlight, genre - a genre only into an empty one unless overwrite: true); {type: "tags_add", value: [up to 10 tags]}; ' +
     '{type: "control_tag_add" | "control_tag_remove", value: "+tag"}; {type: "mail", value: note of up to 300 characters} - an email to the user, ' +
-    'only for new sounds. stop: no later rule runs on a sound this one matched (the order: order_workflows).';
+    'only for new sounds; {type: "webhook", value: "https://..."} - a signed POST to an address of the user when the workflow acts by itself ' +
+    '(never from apply_workflow; see workflow_webhook). stop: no later rule runs on a sound this one matched (the order: order_workflows).';
   const definition = z.object({
     trigger: z.enum(['ready', 'published', 'analysed', 'tagged', 'milestone']),
     conditions: z.array(z.object({ field: z.string(), op: z.string(), value: z.unknown() })).max(5).optional(),
-    actions: z.array(z.looseObject({ type: z.enum(['set', 'field', 'tags_add', 'control_tag_add', 'control_tag_remove', 'mail']) })).min(1).max(5),
+    actions: z.array(z.looseObject({ type: z.enum(['set', 'field', 'tags_add', 'control_tag_add', 'control_tag_remove', 'mail', 'webhook']) })).min(1).max(5),
     stop: z.boolean().optional(),
   }).describe(DEFINITION_HELP);
   const state = z.enum(['off', 'log', 'on'])
@@ -851,6 +852,27 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     input: { workflow_id: id },
     kind: 'destructive',
     run: ({ workflow_id }) => api.post(`/my/workflows/${workflow_id}/delete/`),
+  });
+
+  tool('workflow_webhook', {
+    title: 'Workflow webhooks',
+    description: 'How the webhook calls of the account are signed and how many went out today (show), a new signing secret that replaces ' +
+      'the old one at once - receivers then need the new one (renew), or one signed test call to an https address with an example sound ' +
+      '(test, at most 20 an hour). A call is a POST with JSON; X-Hearthis-Signature is sha256= and the HMAC-SHA256 of X-Hearthis-Timestamp, ' +
+      'a dot and the body. The secret itself never comes through this server: the user copies it under Webhooks on https://hearthis.at/workflows/.',
+    input: { action: z.enum(['show', 'renew', 'test']), url: z.string().url().startsWith('https://').max(500).optional().describe('For test') },
+    kind: 'write',
+    run: ({ action, url }) => {
+      if (action === 'test' && !url) {
+        throw new ApiError('test needs url.', 400, 'invalid');
+      }
+      const where = { secret_at: 'https://hearthis.at/workflows/' };
+      return action === 'show'
+        ? api.get('/my/workflows/webhook/').then((answer) => ({ ...(answer as object), ...where }))
+        : action === 'renew'
+          ? api.post('/my/workflows/webhook/secret/').then(() => ({ renewed: true, ...where }))
+          : api.post('/my/workflows/webhook/test/', { url });
+    },
   });
 
   tool('order_workflows', {
