@@ -46,6 +46,7 @@ key on save* and save. Every client with the old pair loses access; run `npx hea
 | Sets | `list_my_sets`, `get_set`, `add_to_set`, `edit_set`, `remove_from_set`, `delete_set` |
 | Groups | `list_groups`, `get_group`, `create_group`, `join_group`, `edit_group`, `group_track`, `group_approve`, `group_block`, `group_member_role`, `delete_group` |
 | Messages | `list_conversations`, `read_conversation`, `poll_messages`, `send_message`, `delete_conversation` |
+| Workflows | `list_workflows`, `create_workflow`, `edit_workflow`, `delete_workflow`, `order_workflows`, `test_workflow`, `apply_workflow`, `get_workflow_run`, `cancel_workflow_run`, `workflow_history`, `undo_workflow`, `list_control_tags` |
 
 Tools that delete, overwrite, undo or publish carry the MCP `destructiveHint`, so clients ask before running them;
 only purely additive ones (comments, reactions, messages, adding to a set, creating a group) do not. Not included on purpose:
@@ -54,6 +55,11 @@ those on the website.
 
 Track lists come back with the essential fields of each track; `get_track` returns the full object. No answer
 ever contains your key pair.
+
+Workflows do the routine work on your uploads by rule (When - If - Then): into sets and groups, downloads, podcast,
+tags, control tags like `+radio` that only you see, or an email to you. Let the assistant test a workflow first
+(`test_workflow` writes nothing) and start a new one as a test run (`state: "log"`); `apply_workflow` runs it over the
+sounds you have, and every change can be undone (`undo_workflow`). `edit_track` sets control tags with `control_tags`.
 
 Uploads stay private unless the assistant sets `private=false`. Only audio files (and JPG/PNG covers) can be
 sent; set `HEARTHIS_UPLOAD_DIR` to allow files from that folder only.

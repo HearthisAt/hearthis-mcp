@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Workflows (https://hearthis.at/workflows/): `list_workflows`, `create_workflow`, `edit_workflow`, `delete_workflow`,
+  `order_workflows`, `test_workflow` (writes nothing - a saved workflow or a draft, also on one sound), `apply_workflow`
+  with `get_workflow_run` and `cancel_workflow_run`, `workflow_history` and `undo_workflow` (one entry or a whole run).
+- `list_control_tags` and `control_tags` on `edit_track`: tags like `+radio` that only the owner sees and that
+  steer workflows.
+
 ## 0.2.0
 
 - `get_group` and `join_group` take `invite`: the share link of a private group (or just its secret). hearthis.at now

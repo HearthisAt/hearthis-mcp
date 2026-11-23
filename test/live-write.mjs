@@ -202,11 +202,93 @@ console.log('test track:', own.id, own.permalink, '(private)');
   }
 }
 
-// 9. Refusals that never reach the API
+// 9. Workflows: a rule created off, tested on the unpublished sound (writes nothing), applied to that sound and taken
+// back, renamed and deleted again - deleting keeps its history; a control tag set through edit_track and the list
+// restored. The rule stays off, so the tag set by hand starts no workflow of its own; a switched-on tagged rule of the
+// account could, so the tag part is skipped while one exists.
+{
+  const tagsOf = async () => (await call('get_track', { author, track: own.permalink })).control_tags ?? [];
+  const finished = async (runId) => {
+    for (let round = 0; round < 30; round++) {
+      const run = (await call('get_workflow_run', { run_id: runId })).run;
+      if (run && !['queued', 'running'].includes(run.status)) {
+        return run;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    return null;
+  };
+  const live = ((await call('list_workflows', {})).workflows ?? [])
+    .filter((entry) => entry.state !== 'off' && entry.definition?.trigger === 'tagged');
+  const rule = (await call('create_workflow', { name: 'MCP live test', state: 'off', definition: {
+    trigger: 'tagged',
+    conditions: [{ field: 'control_tags', op: 'any', value: ['+mcp-live-test'] }],
+    actions: [{ type: 'control_tag_add', value: '+mcp-live-done' }],
+  } })).workflow;
+  const before = await tagsOf();
+  try {
+    check('create_workflow made it off', rule?.state === 'off' && rule?.definition?.trigger === 'tagged', String(rule?.id));
+    check('list_workflows has it', ((await call('list_workflows', {})).workflows ?? []).some((entry) => entry.id === rule.id));
+    const tested = await call('test_workflow', { workflow_id: rule.id, track_id: Number(own.id) });
+    check('test_workflow checks one sound', Array.isArray(tested.sounds) && tested.sounds.length === 1, JSON.stringify(tested.sounds?.[0]?.match));
+    const draft = await call('test_workflow', { definition: { trigger: 'ready', actions: [{ type: 'control_tag_add', value: '+mcp-draft' }] } });
+    check('test_workflow takes a draft', typeof draft.total === 'number', String(draft.total));
+    const refused = await client.callTool({ name: 'create_workflow', arguments: { name: 'MCP live test refused', definition: { trigger: 'ready', conditions: [{ field: 'plays', op: 'at_least', value: 1 }], actions: [{ type: 'mail', value: 'x' }] } } });
+    try {
+      check('create_workflow refuses counts with ready', refused.isError === true, (refused.content?.[0]?.text ?? '').slice(0, 80));
+    } finally {
+      const made = refused.isError ? null : JSON.parse(refused.content?.[0]?.text ?? '{}').workflow;
+      if (made?.id) {
+        await call('delete_workflow', { workflow_id: made.id });
+      }
+    }
+    const renamed = (await call('edit_workflow', { workflow_id: rule.id, name: 'MCP live test renamed' })).workflow;
+    check('edit_workflow renamed it', renamed?.name === 'MCP live test renamed' && renamed?.state === 'off');
+    const order = ((await call('list_workflows', {})).workflows ?? []).map((entry) => entry.id);
+    await call('order_workflows', { workflow_ids: order });
+    check('order_workflows keeps the order it was given', JSON.stringify(((await call('list_workflows', {})).workflows ?? []).map((entry) => entry.id)) === JSON.stringify(order), order.join(','));
+
+    if (live.length > 0) {
+      console.log('skip', 'control tags and apply - switched-on tagged workflows on the account:', live.map((entry) => entry.id).join(','));
+    } else {
+      await call('edit_track', { track_id: Number(own.id), control_tags: [...before, '+mcp-live-test'] });
+      check('edit_track set a control tag', (await tagsOf()).includes('+mcp-live-test'));
+      const suggested = (await call('list_control_tags', { q: '+mcp' })).control_tags ?? [];
+      check('list_control_tags suggests it', suggested.some((entry) => entry.tag === '+mcp-live-test'), JSON.stringify(suggested).slice(0, 80));
+
+      const applied = (await call('apply_workflow', { workflow_id: rule.id, track_ids: [Number(own.id)] })).run;
+      const done = applied?.id ? await finished(applied.id) : null;
+      check('apply_workflow ran on the sound', done?.status === 'done', JSON.stringify(done ?? applied).slice(0, 120));
+      check('apply_workflow added the control tag', (await tagsOf()).includes('+mcp-live-done'));
+      const history = await call('workflow_history', { workflow_id: rule.id, run_id: applied?.id });
+      check('workflow_history lists the run', (history.entries ?? []).length > 0, String((history.entries ?? []).length));
+      const undone = applied?.id ? (await call('undo_workflow', { run_id: applied.id })).run : null;
+      const back = undone?.id ? await finished(undone.id) : null;
+      check('undo_workflow took the run back', back?.status === 'done' && !(await tagsOf()).includes('+mcp-live-done'), JSON.stringify(back ?? undone).slice(0, 120));
+    }
+  } finally {
+    if (JSON.stringify(await tagsOf()) !== JSON.stringify(before)) {
+      await call('edit_track', { track_id: Number(own.id), control_tags: before });
+    }
+    if (rule?.id) {
+      await call('delete_workflow', { workflow_id: rule.id });
+    }
+  }
+  check('delete_workflow removed it', !((await call('list_workflows', {})).workflows ?? []).some((entry) => entry.id === rule?.id));
+  check('control tags restored', JSON.stringify(await tagsOf()) === JSON.stringify(before), JSON.stringify(before));
+}
+
+// 10. Refusals that never reach the API
 for (const [name, args] of [
   ['get_user', { author: 'login' }],
   ['set_track_cover', { track_id: Number(own.id), image_path: '/etc/passwd' }],
   ['upload_track', { file_path: '/etc/hosts' }],
+  ['test_workflow', {}],
+  ['test_workflow', { workflow_id: 1, definition: { trigger: 'ready', actions: [{ type: 'mail', value: 'x' }] } }],
+  ['apply_workflow', { workflow_id: 1, track_ids: [] }],
+  ['undo_workflow', {}],
+  ['create_workflow', { name: 'x', definition: { trigger: 'ready', actions: [{ value: 'x' }] } }],
+  ['get_workflow_run', { run_id: 0 }],
 ]) {
   const result = await client.callTool({ name, arguments: args });
   check(`${name} refused locally`, result.isError === true, (result.content?.[0]?.text ?? '').slice(0, 60));

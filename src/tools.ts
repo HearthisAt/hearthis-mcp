@@ -381,6 +381,8 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       embed_domains: z.array(z.string()).optional().describe('Sites allowed to embed the sound'),
       subtitles: flag,
       featured: flag.describe('Switch a bought feature on or off'),
+      control_tags: z.array(z.string()).optional()
+        .describe('The whole list of control tags of the sound, e.g. ["+radio", "+promo"] - only the owner sees them, they steer workflows; replaces the list, [] clears it. Premium only. Setting one starts the workflows with the trigger "tagged"'),
     },
     kind: 'write',
     run: (args) =>
@@ -788,5 +790,156 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     input: { user_id: z.number().int() },
     kind: 'destructive',
     run: ({ user_id }) => api.post(`/messages/${segment(user_id)}/delete/`),
+  });
+  // Workflows: rules that act on the own sounds by themselves (https://hearthis.at/workflows/, Premium)
+  const DEFINITION_HELP =
+    'A rule: When (trigger) - If (all conditions hold) - Then (actions in order). ' +
+    'trigger: ready (encoded and cleared), published (public), analysed (tempo and key known), tagged (a control tag set by hand), ' +
+    'milestone (the counts reach the conditions - needs a count condition with at_least, once per sound). ' +
+    'conditions, up to 5, {field, op, value}: title (contains, not_contains, starts_with, ends_with; * is any text), tags / control_tags ' +
+    '(any, all, none; a list), genre (in, not_in; slugs from list_genres), subgenre (any, none), type (in, not_in; version types), duration ' +
+    '(longer, shorter; seconds), filetype (in, not_in), source (in, not_in; upload, live, feed, import), bpm (between; [min, max]), key (in), ' +
+    'ai (is; true or false), plays / downloads / comments / likes / reposts (at_least, below; only with milestone or tagged), uploaded ' +
+    '(before, since; YYYY-MM-DD), age (older, younger; days; only with milestone or tagged), sets (in, not_in; set or group ids). bpm and ' +
+    'key only with analysed or tagged. actions, 1 to 5, one per target: {type: "set", set: id} (own set, or a group you own or moderate); ' +
+    '{type: "field", field, value} with a field of edit_track (downloadable, download_gate, podcast, hidden, comments, stats_hidden, related, ' +
+    'auto_tracklist, show_analysis, fans_only_play, fans_only_download, fans_only_tracklist, license, version_type, template, waveform_style, ' +
+    'waveform_color, waveform_highlight, genre - a genre only into an empty one unless overwrite: true); {type: "tags_add", value: [up to 10 tags]}; ' +
+    '{type: "control_tag_add" | "control_tag_remove", value: "+tag"}; {type: "mail", value: note of up to 300 characters} - an email to the user, ' +
+    'only for new sounds. stop: no later rule runs on a sound this one matched (the order: order_workflows).';
+  const definition = z.object({
+    trigger: z.enum(['ready', 'published', 'analysed', 'tagged', 'milestone']),
+    conditions: z.array(z.object({ field: z.string(), op: z.string(), value: z.unknown() })).max(5).optional(),
+    actions: z.array(z.looseObject({ type: z.enum(['set', 'field', 'tags_add', 'control_tag_add', 'control_tag_remove', 'mail']) })).min(1).max(5),
+    stop: z.boolean().optional(),
+  }).describe(DEFINITION_HELP);
+  const state = z.enum(['off', 'log', 'on'])
+    .describe('off: does nothing by itself; log: test run - on new sounds it only writes down in the history what it would do; on: acts on new sounds');
+  const json = (value: unknown) => (value === undefined ? undefined : JSON.stringify(value));
+  const id = z.number().int().positive();
+
+  tool('list_workflows', {
+    title: 'List workflows',
+    description: 'The workflows of the account in their order, each with state (off, log = test run, on), version and its rule (trigger, conditions, actions).',
+    input: {},
+    kind: 'read',
+    run: () => api.get('/my/workflows/'),
+  });
+
+  tool('create_workflow', {
+    title: 'Create workflow',
+    description: 'Creates a workflow (at most 20). Start it as a test run (state "log") or "off" and check it with test_workflow first: ' +
+      '"on" acts on every new upload from then on. It never touches the sounds there are - that is apply_workflow. Wording for the ' +
+      'user: workflows do the routine work on their uploads by rule.',
+    input: { name: z.string().min(1).max(80), state: state.default('off'), definition },
+    kind: 'write',
+    run: ({ name, state: value, definition: rule }) => api.post('/my/workflows/', { name, state: value, definition: json(rule) }),
+  });
+
+  tool('edit_workflow', {
+    title: 'Edit workflow',
+    description: 'Changes the name, the state or the rule of a workflow - only what is given. A new rule is a new version; switching it on ' +
+      'or changing its trigger makes it act on uploads from then on.',
+    input: { workflow_id: id, name: z.string().min(1).max(80).optional(), state: state.optional(), definition: definition.optional() },
+    kind: 'write',
+    run: ({ workflow_id, name, state: value, definition: rule }) => api.post(`/my/workflows/${workflow_id}/`, { name, state: value, definition: json(rule) }),
+  });
+
+  tool('delete_workflow', {
+    title: 'Delete workflow',
+    description: 'Deletes a workflow. What it did stays in the history and can still be undone. Ask the user for confirmation first.',
+    input: { workflow_id: id },
+    kind: 'destructive',
+    run: ({ workflow_id }) => api.post(`/my/workflows/${workflow_id}/delete/`),
+  });
+
+  tool('order_workflows', {
+    title: 'Order workflows',
+    description: 'Sets the order the workflows run in on a sound - the ids given first, in that order, the others behind them. Matters for stop.',
+    input: { workflow_ids: z.array(id).min(1).max(20) },
+    kind: 'write',
+    run: ({ workflow_ids }) => api.post('/my/workflows/order/', { ids: workflow_ids.join(',') }),
+  });
+
+  tool('test_workflow', {
+    title: 'Test workflow',
+    description: 'Shows what a saved workflow (workflow_id) or a draft (definition) would do to the own sounds - which match, and per sound ' +
+      'each action with apply or skip and why. Writes nothing. One page at a time: pass next as before for older sounds. With track_id it ' +
+      'checks one sound and shows every condition.',
+    input: {
+      workflow_id: id.optional(),
+      definition: definition.optional(),
+      track_id: z.number().int().optional(),
+      before: z.number().int().min(0).optional().describe('The next of the previous answer'),
+    },
+    kind: 'read',
+    run: ({ workflow_id, definition: rule, track_id, before }) => {
+      if (!workflow_id === !rule) {
+        throw new ApiError('Give either workflow_id (a saved workflow) or definition (a draft).', 400, 'invalid');
+      }
+      return api.post('/my/workflows/test/', { id: workflow_id, definition: json(rule), track_id, before });
+    },
+  });
+
+  tool('apply_workflow', {
+    title: 'Apply workflow',
+    description: 'Applies a saved workflow to the sounds the account already has - the ones given, else all (up to 10,000) - in the ' +
+      'background. Every change goes into the history and can be undone (undo_workflow). Emails are never sent here. One run at a time; ' +
+      'follow it with get_workflow_run. Tell the user what test_workflow showed and ask before applying it to all sounds.',
+    input: { workflow_id: id, track_ids: z.array(z.number().int().positive()).min(1).max(10000).optional().describe('Leave out for all sounds') },
+    kind: 'write',
+    run: ({ workflow_id, track_ids }) => api.post(`/my/workflows/${workflow_id}/apply/`, { track_ids: track_ids?.join(',') }),
+  });
+
+  tool('get_workflow_run', {
+    title: 'Workflow runs',
+    description: 'A run of apply_workflow or undo_workflow with its progress (done of total, applied, skipped, failed) - or, without run_id, the recent runs.',
+    input: { run_id: id.optional() },
+    kind: 'read',
+    run: ({ run_id }) => api.get(run_id ? `/my/workflows/runs/${run_id}/` : '/my/workflows/runs/'),
+  });
+
+  tool('cancel_workflow_run', {
+    title: 'Cancel workflow run',
+    description: 'Stops an open run. What it changed so far stays - undo it with undo_workflow and the run_id.',
+    input: { run_id: id },
+    kind: 'write',
+    run: ({ run_id }) => api.post(`/my/workflows/runs/${run_id}/cancel/`),
+  });
+
+  tool('workflow_history', {
+    title: 'Workflow history',
+    description: 'What the workflows did, newest first: per sound and action the value before and after, applied or skipped and why, ' +
+      'and whether it was undone. Filter by workflow, sound or run; pass next as before for older entries.',
+    input: {
+      workflow_id: id.optional(),
+      track_id: z.number().int().optional(),
+      run_id: id.optional(),
+      before: z.number().int().min(0).optional(),
+    },
+    kind: 'read',
+    run: ({ workflow_id, track_id, run_id, before }) => api.get('/my/workflows/log/', { rule_id: workflow_id, track_id, run_id, before }),
+  });
+
+  tool('undo_workflow', {
+    title: 'Undo workflow changes',
+    description: 'Takes back what a workflow did: one history entry (entry_id) right away, or a whole run (run_id) in the background. Only ' +
+      'what is still as the workflow left it - a value the user changed since stays. Emails cannot be taken back.',
+    input: { entry_id: id.optional(), run_id: id.optional() },
+    kind: 'write',
+    run: ({ entry_id, run_id }) => {
+      if (!entry_id === !run_id) {
+        throw new ApiError('Give either entry_id or run_id.', 400, 'invalid');
+      }
+      return entry_id ? api.post(`/my/workflows/log/${entry_id}/revert/`) : api.post(`/my/workflows/runs/${run_id}/revert/`);
+    },
+  });
+
+  tool('list_control_tags', {
+    title: 'Control tags',
+    description: 'The control tags of the account (+name, only the owner sees them) with how many sounds carry each, plus the ones the workflows name. q filters by the start, e.g. "+ra".',
+    input: { q: z.string().max(20).optional() },
+    kind: 'read',
+    run: ({ q }) => api.get('/my/control-tags/', { q }),
   });
 }
