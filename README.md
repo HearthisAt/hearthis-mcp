@@ -8,7 +8,8 @@ without Premium (`403 premium_required`).
 
 ## Setup
 
-Needs Node.js 20 or newer.
+Needs Node.js 20 or newer. Speaks MCP 2026-07-28 and still serves clients of the earlier revisions (2025-11-25 and
+before), over stdio.
 
 ```sh
 npx hearthis-mcp login
@@ -81,7 +82,8 @@ Issues and pull requests: https://github.com/HearthisAt/hearthis-mcp. API docume
 ```sh
 npm install
 npm run build
-node test/live-smoke.mjs path/to/env-file   # read-only calls against the live API
+npm run test:protocol                       # offline: progress and cancel in both protocol eras (about 40 s)
+node test/live-smoke.mjs path/to/env-file   # read-only calls against the live API, once per protocol era
 node test/live-write.mjs path/to/env-file   # reversible writes on the test account, each turned back
 ```
 

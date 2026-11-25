@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- MCP 2026-07-28: the server answers `server/discover` and requests that carry their protocol version in `_meta`, without
+  the `initialize` handshake. Clients of the earlier revisions (2025-11-25 and before) keep working unchanged - the
+  connection's first message decides which revision it speaks.
+- The tool list may be cached by the client for an hour (`ttlMs`); it only changes with a new version.
+- Built on the v2 MCP SDK (`@modelcontextprotocol/server`). Same 69 tools, same answers; progress during long calls and
+  cancelling a call work in both revisions.
+- Tool input schemas now declare JSON Schema 2020-12 (was draft-07). A client that validates tool schemas with a
+  draft-07-only validator needs 2020-12 support.
+
 ## 0.4.0
 
 - Feed sync (https://hearthis.at/imports/): `list_feeds`, `add_feed`, `edit_feed`, `check_feed`, `remove_feed` - podcast and

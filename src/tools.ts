@@ -1,5 +1,4 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
+import type { McpServer, ServerContext, ToolAnnotations } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { ApiError, authorSegment, compactTracks, type HearthisClient, type Params, redact, requestContext, segment, toText, XHR_BASE } from './client.js';
 
@@ -37,32 +36,25 @@ const ANNOTATIONS: Record<ToolDef<Shape>['kind'], ToolAnnotations> = {
   destructive: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 };
 
-/** What a tool handler gets besides its arguments (RequestHandlerExtra of the SDK, the parts used here). */
-interface CallExtra {
-  signal?: AbortSignal;
-  _meta?: { progressToken?: string | number };
-  sendNotification?: (notification: { method: 'notifications/progress'; params: Record<string, unknown> }) => Promise<void>;
-}
-
 const PROGRESS_EVERY_MS = 10_000;
 
 export function registerTools(server: McpServer, api: HearthisClient): void {
   const tool = <S extends Shape>(name: string, def: ToolDef<S>) => {
     server.registerTool(
       name,
-      { title: def.title, description: def.description, inputSchema: def.input, annotations: { title: def.title, ...ANNOTATIONS[def.kind] } },
-      (async (args: z.infer<z.ZodObject<S>>, extra?: CallExtra) => {
+      { title: def.title, description: def.description, inputSchema: z.object(def.input), annotations: { title: def.title, ...ANNOTATIONS[def.kind] } },
+      (async (args: z.infer<z.ZodObject<S>>, ctx: ServerContext) => {
         // A long call (an upload) reports progress, so a client that asked for it keeps waiting; a cancelled call aborts its request
-        const token = extra?._meta?.progressToken;
+        const token = ctx.mcpReq._meta?.progressToken;
         let beats = 0;
         const timer =
-          token !== undefined && extra?.sendNotification
+          token !== undefined
             ? setInterval(() => {
-                extra.sendNotification?.({ method: 'notifications/progress', params: { progressToken: token, progress: ++beats, message: 'Waiting for hearthis.at' } }).catch(() => {});
+                ctx.mcpReq.notify({ method: 'notifications/progress', params: { progressToken: token, progress: ++beats, message: 'Waiting for hearthis.at' } }).catch(() => {});
               }, PROGRESS_EVERY_MS)
             : undefined;
         try {
-          return await requestContext.run({ signal: extra?.signal }, async () => {
+          return await requestContext.run({ signal: ctx.mcpReq.signal }, async () => {
             await api.ensurePremium();
             const data = await def.run(args);
             return { content: [{ type: 'text' as const, text: api.scrub(toText(redact(def.full ? data : compactTracks(data)))) }] };

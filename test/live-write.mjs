@@ -4,8 +4,8 @@
 // no messages, no comments, no likes).
 // node test/live-write.mjs <env file with HEARTHIS_TEST_EMAIL / HEARTHIS_TEST_PASSWORD of a Premium account>
 import fs from 'node:fs';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 const env = Object.fromEntries(fs.readFileSync(process.argv[2], 'utf8').split('\n').filter((line) => /^[A-Z_]+=/.test(line))
   .map((line) => { const at = line.indexOf('='); return [line.slice(0, at), line.slice(at + 1).replace(/^["']|["']$/g, '')]; }));
@@ -15,7 +15,7 @@ const login = await fetch('https://api-v2.hearthis.at/login/', {
   body: new URLSearchParams({ email: env.HEARTHIS_TEST_EMAIL, password: env.HEARTHIS_TEST_PASSWORD }),
 }).then((response) => response.json());
 
-const client = new Client({ name: 'live-write', version: '0' });
+const client = new Client({ name: 'live-write', version: '0' }, { versionNegotiation: { mode: { pin: '2026-07-28' } } });
 await client.connect(new StdioClientTransport({
   command: process.execPath,
   args: [new URL('../dist/index.js', import.meta.url).pathname],
