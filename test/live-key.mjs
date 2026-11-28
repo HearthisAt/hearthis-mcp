@@ -68,7 +68,7 @@ try {
   {
     const client = await connect(full.token);
     const { tools } = await client.listTools();
-    check(tools.length === 71 && !tools.some((t) => t.name === 'delete_conversation'), `a key is offered every tool but delete_conversation (${tools.length})`);
+    check(tools.length === 74 && !tools.some((t) => t.name === 'delete_conversation'), `a key is offered every tool but delete_conversation (${tools.length})`);
     const who = await call(client, 'whoami');
     check(!who.error && who.text.includes(`"permalink":"${login.permalink}"`) && who.text.includes('"premium":true') && who.text.includes('"scopes":["profile","read","social","write","messages"]'), 'whoami reads the account of the key');
     check(!who.text.includes(full.token) && !/"(secret|masterkeystore)"/.test(who.text), 'no credential in the answer');
@@ -82,6 +82,8 @@ try {
       ['list_feeds', {}, '"feeds"'],
       ['workflow_webhook', { action: 'show' }, 'signature'],
       ['get_account_stats', { days: 7 }, '"totals"'],
+      ['get_link_page', {}, '"visible"'],
+      ['get_link_page_stats', { days: 7 }, '"opens"'],
       ['get_faq', { id: '70' }, 'hearthis-mcp'],
       ['get_faq', { query: 'upload limit', count: 2 }, '"hits"'],
       ['get_faq', { lang: 'de' }, '"topics"'],
@@ -108,6 +110,10 @@ try {
     check(inbox.error && /"Messages" \(messages\)/.test(inbox.text), 'messages need their own right');
     const faq = await call(client, 'get_faq', { id: '70' });
     check(!faq.error && faq.text.includes('"question"'), 'the FAQ needs no right');
+    const page = await call(client, 'get_link_page', {});
+    check(!page.error && page.text.includes('"visible"'), 'a read-only key reads the link page as its owner');
+    const edit = await call(client, 'edit_link_page', { sound_mode: 'play' });
+    check(edit.error && /"Upload and edit" \(write\)/.test(edit.text), 'and is told which right changing it needs');
     const stats = await call(client, 'get_account_stats', {});
     check(!stats.error && stats.text.includes('"period"'), 'a read-only key reads the statistics');
     const quality = await call(client, 'streaming_quality', { author: login.permalink, track: 'not-a-sound-of-the-test', value: 'best' });

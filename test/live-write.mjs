@@ -312,7 +312,39 @@ console.log('test track:', own.id, own.permalink, '(private)');
   check('control tags restored', JSON.stringify(await tagsOf()) === JSON.stringify(before), JSON.stringify(before));
 }
 
-// 10. Refusals that never reach the API
+// 10. Link page: sound_mode changed and restored, links, tracks and sets written as they are
+{
+  const before = await call('get_link_page', {});
+  if (before.available !== true) {
+    check('the test account has a link page', false, JSON.stringify(before).slice(0, 120));
+  } else {
+    const other = before.sound_mode === 'play' ? 'open' : 'play';
+    let restored = false;
+    try {
+      const saved = await call('edit_link_page', { sound_mode: other });
+      check('edit_link_page changed sound_mode', saved.sound_mode === other);
+      check('and kept the links', JSON.stringify(saved.links) === JSON.stringify(before.links));
+    } finally {
+      // the page is public: a second try, and the value to set by hand when both fail
+      for (let attempt = 0; attempt < 2 && !restored; attempt++) {
+        restored = await call('edit_link_page', { sound_mode: before.sound_mode }).then((back) => back.sound_mode === before.sound_mode, () => false);
+      }
+      if (!restored) {
+        console.log(`RESTORE BY HAND: sound_mode of the link page was "${before.sound_mode}"`);
+      }
+    }
+    check('sound_mode restored', restored);
+    // the links exactly as get_link_page gave them - with type, title and url of a profile link too
+    const written = await call('edit_link_page', { links: before.links, tracks: before.tracks.map((entry) => entry.id), sets: before.sets.map((entry) => entry.id) });
+    check('nothing was left out', written.not_saved === undefined, JSON.stringify(written.not_saved ?? ''));
+    const after = await call('get_link_page', {});
+    check('the link page written as it was is the same page', JSON.stringify(after) === JSON.stringify(before), `${before.links.length} links`);
+    const stats = await call('get_link_page_stats', { days: 7 });
+    check('get_link_page_stats answers', stats.days === 7 && typeof stats.opens === 'number', `opens ${stats.opens}`);
+  }
+}
+
+// 11. Refusals that never reach the API
 for (const [name, args] of [
   ['get_user', { author: 'login' }],
   ['set_track_cover', { track_id: Number(own.id), image_path: '/etc/passwd' }],
@@ -325,6 +357,8 @@ for (const [name, args] of [
   ['get_workflow_run', { run_id: 0 }],
   ['workflow_webhook', { action: 'test' }],
   ['workflow_webhook', { action: 'test', url: 'http://example.com/hook' }],
+  // only what writes nothing should the refusal ever fail - the refusals of its links are tested offline (test/api-key.mjs)
+  ['edit_link_page', {}],
 ]) {
   const result = await client.callTool({ name, arguments: args });
   check(`${name} refused locally`, result.isError === true, (result.content?.[0]?.text ?? '').slice(0, 60));

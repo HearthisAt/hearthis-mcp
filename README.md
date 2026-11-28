@@ -34,9 +34,9 @@ The key decides what the assistant can do:
 
 | Right of the key | Tools |
 |---|---|
-| *Read* | browsing, searching, your feed, sets, private sounds and statistics |
+| *Read* | browsing, searching, your feed, sets, private sounds, statistics and your link page |
 | *Likes, follows and comments* | likes, reposts, listen later, comments, reactions, follows, joining a group |
-| *Upload and edit* | uploads, editing and deleting sounds, sets and groups, your profile and badges, workflows and feed sync |
+| *Upload and edit* | uploads, editing and deleting sounds, sets and groups, your profile, badges and link page, workflows and feed sync |
 | *Messages* | reading and answering your direct messages |
 
 A tool the key has no right for says which right it needs. A key works for accounts without a password (Google,
@@ -69,6 +69,7 @@ loses access; run `npx hearthis-mcp login` again.
 | Tracks | `get_track`, `get_track_stats`, `get_track_part`, `toggle_like`, `toggle_repost`, `set_listen_later`, `get_cast_url`, `post_comment`, `delete_comment`, `post_reaction`, `streaming_quality`, `copy_track_image` |
 | Own tracks | `upload_track`, `edit_track`, `delete_track`, `set_track_cover`, `remove_track_cover` |
 | Users | `get_user`, `edit_profile`, `toggle_follow`, `badge_settings`, `get_fan_subscriptions` |
+| Link page | `get_link_page`, `edit_link_page`, `get_link_page_stats` |
 | Sets | `list_my_sets`, `get_set`, `add_to_set`, `edit_set`, `remove_from_set`, `delete_set` |
 | Groups | `list_groups`, `get_group`, `create_group`, `join_group`, `edit_group`, `group_track`, `group_approve`, `group_block`, `group_member_role`, `delete_group` |
 | Messages | `list_conversations`, `read_conversation`, `poll_messages`, `send_message`, `delete_conversation` |

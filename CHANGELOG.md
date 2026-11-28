@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0
+
+- Link page (https://hearthis.at/@yourname/): `get_link_page` reads it - its links in order, hidden ones too, the picked
+  sounds and sets and how a sound opens -, `edit_link_page` sets the order, hides a link of the profile, adds or removes
+  links only this page has, picks sounds and sets and switches between playing on the page and opening on hearthis.at.
+  `get_link_page_stats` has its opens, clicks, plays, shares, clicked links, sources and countries over 7, 30 or 90 days.
+- With an API key: reading the link page and its statistics needs *Read*, changing it *Upload and edit*.
+
 ## 0.6.0
 
 - Sign in with a personal API key: `HEARTHIS_API_KEY=htp_…` instead of the key pair, and `npx hearthis-mcp login` takes a

@@ -26,6 +26,8 @@ const flag = z.boolean().optional();
 const iso = z.string().optional().describe('ISO 8601 with UTC offset, e.g. 2026-07-01T20:00:00+02:00');
 const trackPath = (a: string, t: string, action = '') => `/${authorSegment(a)}/${segment(t)}/${action ? action + '/' : ''}`;
 const bit = (value: boolean | undefined) => (value === undefined ? undefined : value ? 1 : 0);
+/** A list or an object as the JSON text a form field carries. */
+const json = (value: unknown) => (value === undefined ? undefined : JSON.stringify(value));
 const invite = z.string().optional()
   .describe('Invitation of a private group: its share link https://hearthis.at/group/{id}/{name}/{secret}/ or just the secret');
 /** The secret of an invitation link, or the secret itself. */
@@ -516,6 +518,120 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     run: (args) => api.get('/fan_subscriptions.php', args),
   });
 
+  // Link page
+
+  tool('get_link_page', {
+    title: 'Link page',
+    description:
+      'The link page of the account - https://hearthis.at/@{profile}/, one public page with its links, sounds and sets: available ' +
+      '(false: the profile has none yet), url, sound_mode, the links in order with key, type, title, url and visible (hidden ones ' +
+      'too) and the picked tracks and sets (empty: the page shows the five newest public ones). Its numbers: get_link_page_stats.',
+    input: {},
+    kind: 'read',
+    full: true,
+    run: async () => {
+      const account = await api.ensurePremium();
+      const profile = (await api.get(`/${authorSegment(account.permalink)}/`)) as { linkpage?: unknown } | null;
+      if (!profile?.linkpage) {
+        throw new ApiError('hearthis.at did not answer the link page of the account.', 502);
+      }
+      return profile.linkpage;
+    },
+  });
+
+  tool('edit_link_page', {
+    title: 'Edit link page',
+    description:
+      'Sets up the link page of the account - only the fields given change, and the page is public: a change shows at once. links is ' +
+      'the whole list in its new order, as get_link_page gives it: a link of the profile as {key, visible} (visible false hides it), ' +
+      'a link only this page has as {title, url}. Links of the profile that are left out show - one hidden before too -, own links ' +
+      'that are left out are removed. Title and address of a profile link change with edit_profile. Ids that are no public sound ' +
+      'or set of the account are left out. Answers the new link page, with not_saved when an entry of links was not taken.',
+    input: {
+      links: z
+        .array(
+          z.object({
+            key: z.string().min(1).max(80).optional().describe('A link of the profile: its key from get_link_page'),
+            visible: flag.describe('A link of the profile: false hides it on the link page'),
+            title: z.string().max(80).optional().describe('An own link: its title, empty shows the host'),
+            url: z.string().min(1).max(600).optional().describe('An own link: its https address'),
+          }),
+        )
+        .max(120)
+        .optional()
+        .describe('All links in order; up to 30 own ones'),
+      tracks: z.array(z.number().int().positive()).max(20).optional().describe('Ids of own public sounds to show, in order; [] shows the five newest'),
+      sets: z.array(z.number().int().positive()).max(20).optional().describe('Ids of own public sets to show, in order; [] shows the five newest'),
+      sound_mode: z.enum(['play', 'open']).optional().describe('play: a sound plays on the page; open: it opens on hearthis.at'),
+    },
+    kind: 'write',
+    access: 'write',
+    full: true,
+    run: async ({ links, tracks, sets, sound_mode }) => {
+      if (links === undefined && tracks === undefined && sets === undefined && sound_mode === undefined) {
+        throw new ApiError('Give links, tracks, sets or sound_mode.', 400, 'invalid_input');
+      }
+      // The API drops an entry it cannot place without a word: what is neither a profile link nor an own one is refused
+      // here, what the API then left out (a key the profile does not have, an address it does not take) is named below
+      const entries = links?.map((link, index) => {
+        const own = link.key === undefined || link.key === 'custom';
+        if (own && !link.url) {
+          throw new ApiError(`links[${index}] needs the key of a profile link, or title and url for an own link.`, 400, 'invalid_input');
+        }
+        if (own && link.visible === false) {
+          throw new ApiError(`links[${index}] is an own link: it cannot be hidden - leave it out to remove it.`, 400, 'invalid_input');
+        }
+        return own ? { title: link.title ?? '', url: link.url } : { key: link.key, visible: link.visible ?? true };
+      });
+      const saved = (await api.post('/my/linkpage/', { links: json(entries), tracks: json(tracks), sets: json(sets), sound_mode })) as
+        | { links?: { key?: string }[] }
+        | null;
+      if (!entries || !saved || !Array.isArray(saved.links)) {
+        return saved;
+      }
+      const stored = saved.links.map((link) => link.key);
+      const unknown = entries.flatMap((entry) => (entry.key !== undefined && !stored.includes(entry.key) ? [entry.key] : []));
+      const ownMissing = entries.filter((entry) => entry.key === undefined).length - stored.filter((key) => key === 'custom').length;
+      if (unknown.length === 0 && ownMissing <= 0) {
+        return saved;
+      }
+      return {
+        ...saved,
+        not_saved: {
+          ...(unknown.length > 0 ? { unknown_keys: unknown } : {}),
+          ...(ownMissing > 0 ? { own_links: ownMissing } : {}),
+          note:
+            'hearthis.at left these out: a key that is no link of the profile (an own link goes without key, as title and url), ' +
+            'an own link whose address it does not take, or the same address twice.',
+        },
+      };
+    },
+  });
+
+  tool('get_link_page_stats', {
+    title: 'Link page statistics',
+    description:
+      'Statistics of the link page over the last 7, 30 (default) or 90 days: opens, clicks, click_rate (clicks per 100 opens), plays, ' +
+      'shares, the numbers per day, the clicked links, the sources and the countries of the visitors. Visitors who block tracking ' +
+      'are not counted; up to 15 minutes old. partial: the period starts before the counting did (since is its first counted day).',
+    input: { days: z.union([z.literal(7), z.literal(30), z.literal(90)]).optional().describe('Period in days: 7, 30 or 90') },
+    kind: 'read',
+    full: true,
+    run: async ({ days }) => {
+      try {
+        return await api.get('/my/linkpage/stats/', { days });
+      } catch (error) {
+        if (error instanceof ApiError && error.code === 'no_linkpage') {
+          throw new ApiError('The account has no link page yet: it needs a visible, verified profile with at least one upload.', 404, 'no_linkpage');
+        }
+        if (error instanceof ApiError && error.code === 'unavailable') {
+          throw new ApiError('hearthis.at cannot read the link page statistics right now - try again later.', 503, 'unavailable');
+        }
+        throw error;
+      }
+    },
+  });
+
   // Sets (playlists)
 
   tool('list_my_sets', {
@@ -890,7 +1006,6 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
   }).describe(DEFINITION_HELP);
   const state = z.enum(['off', 'log', 'on'])
     .describe('off: does nothing by itself; log: test run - on new sounds it only writes down in the history what it would do; on: acts on new sounds');
-  const json = (value: unknown) => (value === undefined ? undefined : JSON.stringify(value));
   const id = z.number().int().positive();
 
   tool('list_workflows', {
