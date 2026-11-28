@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- README: the public endpoint of hearthis.at (`https://api-v2.hearthis.at/mcp/`) for reading without an account.
+- `test/live-public.mjs` connects to that endpoint with the SDK client over HTTP, in each way of version negotiation.
+
 ## 0.7.0
 
 - Link page (https://hearthis.at/@yourname/): `get_link_page` reads it - its links in order, hidden ones too, the picked

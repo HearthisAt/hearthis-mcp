@@ -6,6 +6,24 @@ search, upload, edit and message on hearthis.at as your account.
 **Available for hearthis.at Premium members only.** The API refuses requests of this server from accounts
 without Premium (`403 premium_required`).
 
+## Without an account: the public endpoint
+
+Only want to look around? hearthis.at hosts a public MCP server - nothing to install, no account, no key. Add its
+address as a remote MCP server (a custom connector) in your AI client:
+
+```
+https://api-v2.hearthis.at/mcp/
+```
+
+```sh
+claude mcp add --transport http hearthis-public https://api-v2.hearthis.at/mcp/
+```
+
+It reads what everybody sees on hearthis.at - search, the feed, genres, sounds with tracklist, transcript and comments,
+profiles, sets, groups, events and the FAQ - and never signs in. Its tools carry the names and arguments of the same
+tools here. Everything with your account (likes, comments, uploads, editing, messages, statistics, workflows) needs
+this package.
+
 ## Setup
 
 Needs Node.js 20 or newer. Speaks MCP 2026-07-28 and still serves clients of the earlier revisions (2025-11-25 and
