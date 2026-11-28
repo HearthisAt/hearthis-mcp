@@ -15,7 +15,7 @@ const answer = () => new Promise((resolve, reject) => {
     reject(new Error('aborted'));
   });
 });
-const api = { ensurePremium: async () => ({ permalink: 'fake' }), get: answer, post: answer, scrub: (text) => text };
+const api = { mode: 'pair', ensurePremium: async () => ({ permalink: 'fake' }), ensureAccess: () => {}, profile: answer, get: answer, post: answer, scrub: (text) => text };
 
 serveStdio(() => {
   const server = new McpServer({ name: 'hearthis', version: 'fake' });

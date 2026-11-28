@@ -2,7 +2,9 @@
 // plus the caption of its profile), every change turned back in the same run. Nothing is created that would need deleting: hearthis.at
 // has no staging, and test content is never deleted (no upload, no new set or group, no delete tools, no follow,
 // no messages, no comments, no likes).
-// node test/live-write.mjs <env file with HEARTHIS_TEST_EMAIL / HEARTHIS_TEST_PASSWORD of a Premium account>
+// node test/live-write.mjs <env file with HEARTHIS_TEST_EMAIL / HEARTHIS_TEST_PASSWORD of a Premium account> [key]
+// With "key" the server signs in with a personal API key made for this run (all rights, revoked at the end) instead of
+// the key pair - every step runs with either.
 import fs from 'node:fs';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
@@ -15,19 +17,47 @@ const login = await fetch('https://api-v2.hearthis.at/login/', {
   body: new URLSearchParams({ email: env.HEARTHIS_TEST_EMAIL, password: env.HEARTHIS_TEST_PASSWORD }),
 }).then((response) => response.json());
 
+const withKey = process.argv[3] === 'key';
+const pair = new URLSearchParams({ key: login.key, secret: login.secret });
+const apiKey = withKey
+  ? (await fetch(`https://api-v2.hearthis.at/api-keys/?${pair}`, {
+      method: 'POST',
+      headers: { 'User-Agent': 'hearthis-mcp-test/0', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `hearthis-mcp live-write ${Date.now()}`, scopes: ['read', 'social', 'write', 'messages'], expires_in_days: 30 }),
+    }).then((response) => response.json())).key
+  : null;
+if (withKey && !apiKey?.token) {
+  console.log('No API key could be made - stopping.');
+  process.exit(1);
+}
+const revokeKey = async () => {
+  if (apiKey) {
+    const response = await fetch(`https://api-v2.hearthis.at/api-keys/${apiKey.id}/?${pair}`, { method: 'POST', headers: { 'User-Agent': 'hearthis-mcp-test/0' } });
+    console.log(response.status === 200 ? 'ok  ' : 'FAIL', `API key ${apiKey.id} revoked`);
+  }
+};
+// A failed step ends the run - never without revoking the key made for it
+for (const event of ['uncaughtException', 'unhandledRejection']) {
+  process.on(event, async (error) => {
+    console.log('FAIL', error?.message ?? error);
+    await revokeKey();
+    process.exit(1);
+  });
+}
+const { HEARTHIS_KEY: unusedKey, HEARTHIS_SECRET: unusedSecret, HEARTHIS_API_KEY: unusedApiKey, ...cleanEnv } = process.env;
 const client = new Client({ name: 'live-write', version: '0' }, { versionNegotiation: { mode: { pin: '2026-07-28' } } });
 await client.connect(new StdioClientTransport({
   command: process.execPath,
   args: [new URL('../dist/index.js', import.meta.url).pathname],
-  env: { ...process.env, HEARTHIS_KEY: login.key, HEARTHIS_SECRET: login.secret },
+  env: { ...cleanEnv, ...(apiKey ? { HEARTHIS_API_KEY: apiKey.token } : { HEARTHIS_KEY: login.key, HEARTHIS_SECRET: login.secret }) },
 }));
 
 let failed = 0;
 const call = async (name, args) => {
   const result = await client.callTool({ name, arguments: args });
   const text = result.content?.[0]?.text ?? '';
-  if (text.includes(login.key) || text.includes(login.secret)) {
-    throw new Error(`${name} returned the key pair`);
+  if (text.includes(login.key) || text.includes(login.secret) || (apiKey && text.includes(apiKey.token))) {
+    throw new Error(`${name} returned the credentials`);
   }
   if (result.isError) {
     throw new Error(`${name}: ${text}`);
@@ -301,5 +331,6 @@ for (const [name, args] of [
 }
 
 await client.close();
+await revokeKey();
 console.log(failed ? `\n${failed} check(s) failed` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

@@ -1,6 +1,6 @@
 {
   "name": "hearthis-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server for hearthis.at - lets an AI assistant browse, upload, edit and message as your account (Premium members)",
   "keywords": [
     "mcp",
@@ -40,7 +40,8 @@
     "smoke": "node test/live-smoke.mjs",
     "test:write": "node test/live-write.mjs",
     "prepublishOnly": "tsc",
-    "test:protocol": "node test/protocol.mjs"
+    "test:protocol": "node test/protocol.mjs",
+    "test:key": "node test/api-key.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.4.0",

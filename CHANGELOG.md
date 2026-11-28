@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0
+
+- Sign in with a personal API key: `HEARTHIS_API_KEY=htp_…` instead of the key pair, and `npx hearthis-mcp login` takes a
+  key at its prompt. No password involved - for accounts that sign in with Google, Facebook or a passkey too. Create the
+  key at https://studio.hearthis.at/channel/#account with the rights the assistant should have: *Read*, *Likes, follows
+  and comments*, *Upload and edit*, *Messages*.
+- With a key the server offers every tool but `delete_conversation`. A tool the key lacks the right for says which right
+  it needs, before any request.
+- The key pair (`HEARTHIS_KEY`, `HEARTHIS_SECRET`) works as before, with every tool.
+- Statistics: `get_account_stats` (the account over 7, 28, 90 or 365 days) and `get_track_stats` (one own track).
+- `get_faq`: the FAQ of hearthis.at - search it, read one answer or list all questions, in ten languages. The assistant
+  looks there before answering a question about hearthis.at itself.
+- `edit_profile` and `badge_settings` use the documented paths `/my/profile/` and `/my/badges/`.
+
 ## 0.5.0
 
 - MCP 2026-07-28: the server answers `server/discover` and requests that carry their protocol version in `_meta`, without

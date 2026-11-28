@@ -32,25 +32,61 @@ export interface Account {
   permalink: string;
   username: string;
   premium: boolean;
+  /** What a personal API key may do (read, social, write) - undefined for the key pair, which is the whole account. */
+  scopes?: string[];
+}
+
+/** A personal API key as hearthis.at issues it (settings, API keys). */
+export const API_KEY_PATTERN = /^htp_[A-Za-z0-9_-]{40}$/;
+export const API_KEYS_URL = 'https://studio.hearthis.at/channel/#account';
+
+/**
+ * How the server signs in: the account's key pair (everything the account can do), or a personal API key - sent as a
+ * Bearer token, limited to its scopes (read, social, write, messages) and never open to deleting a conversation.
+ */
+export type Credentials = { kind: 'pair'; key: string; secret: string } | { kind: 'token'; token: string } | { kind: 'none'; reason: string };
+
+/** Which tools a personal API key reaches: a scope it must hold, or 'pair' for what no key may do. */
+export type Access = 'read' | 'social' | 'write' | 'messages' | 'pair';
+
+const NOT_CONFIGURED =
+  'No hearthis.at credentials are set. Run "npx hearthis-mcp login" and add HEARTHIS_API_KEY (or HEARTHIS_KEY and HEARTHIS_SECRET) to the MCP client configuration.';
+
+/** The credentials from the environment: a personal API key wins over the key pair. */
+export function credentialsFromEnv(env: NodeJS.ProcessEnv): Credentials {
+  const key = env.HEARTHIS_KEY?.trim() ?? '';
+  const secret = env.HEARTHIS_SECRET?.trim() ?? '';
+  // A key pasted into HEARTHIS_KEY is still a personal API key
+  const token = env.HEARTHIS_API_KEY?.trim() || (key.startsWith('htp_') ? key : '');
+  if (token !== '') {
+    return API_KEY_PATTERN.test(token)
+      ? { kind: 'token', token }
+      : { kind: 'none', reason: `HEARTHIS_API_KEY is no hearthis.at API key (htp_ and 40 characters). Create one at ${API_KEYS_URL}` };
+  }
+  return key !== '' && secret !== '' ? { kind: 'pair', key, secret } : { kind: 'none', reason: NOT_CONFIGURED };
 }
 
 export class HearthisClient {
   private account: { value: Account; at: number } | null = null;
 
   constructor(
-    private readonly key: string,
-    private readonly secret: string,
+    private readonly credentials: Credentials,
     private readonly userAgent: string,
   ) {}
 
   get configured(): boolean {
-    return this.key !== '' && this.secret !== '';
+    return this.credentials.kind !== 'none';
   }
 
-  /** Last line of defence: the key pair never leaves in a text, whatever field or message it came in. */
+  /** 'token' when a personal API key signs in. */
+  get mode(): Credentials['kind'] {
+    return this.credentials.kind;
+  }
+
+  /** Last line of defence: no credential ever leaves in a text, whatever field or message it came in. */
   scrub(text: string): string {
     let out = text;
-    for (const value of [this.secret, this.key]) {
+    for (const value of this.secrets()) {
       if (value.length >= 8) {
         out = out.split(value).join('[redacted]');
       }
@@ -59,13 +95,13 @@ export class HearthisClient {
   }
 
   async get(path: string, params: Params = {}, base = API_BASE): Promise<unknown> {
-    const url = buildUrl(base, path, { ...params, key: this.key, secret: this.secret });
+    const url = buildUrl(base, path, { ...params, ...this.pair() });
     return this.send(url, { method: 'GET' });
   }
 
   async post(path: string, params: Params = {}, query: Params = {}, base = API_BASE): Promise<unknown> {
     const body = new URLSearchParams();
-    for (const [name, value] of Object.entries({ ...params, key: this.key, secret: this.secret })) {
+    for (const [name, value] of Object.entries({ ...params, ...this.pair() })) {
       if (value !== undefined && value !== null) {
         body.set(name, String(value));
       }
@@ -84,8 +120,13 @@ export class HearthisClient {
       await checkLocalFile(file.path, file.kind);
       form.set(field, await openAsBlob(file.path), basename(file.path));
     }
-    // Credentials in the query: above post_max_size PHP drops the whole body, and without them the API would answer premium_required
-    return this.send(buildUrl(XHR_BASE, path, { key: this.key, secret: this.secret }), { method: 'POST', body: form }, 0);
+    // The key pair in the query: above post_max_size PHP drops the whole body, and without it the API would answer premium_required
+    return this.send(buildUrl(XHR_BASE, path, this.pair()), { method: 'POST', body: form }, 0);
+  }
+
+  /** The account as the API tells it: /login/ for the key pair, /oauth/userinfo/ for a personal API key (no key may ask /login/). */
+  profile(): Promise<unknown> {
+    return this.get(this.credentials.kind === 'token' ? '/oauth/userinfo/' : '/login/');
   }
 
   /** The authenticated account, cached for ten minutes - Premium can end at any time. */
@@ -93,31 +134,32 @@ export class HearthisClient {
     if (!force && this.account && Date.now() - this.account.at < 600_000) {
       return this.account.value;
     }
-    const data = (await this.get('/login/')) as Record<string, unknown>;
+    const data = (await this.profile()) as Record<string, unknown>;
     if (!data || data.success === false || !data.id) {
       throw new ApiError(
-        'hearthis.at did not accept HEARTHIS_KEY / HEARTHIS_SECRET. Run "npx hearthis-mcp login" to get a fresh pair.',
+        this.credentials.kind === 'token'
+          ? `hearthis.at did not accept HEARTHIS_API_KEY. Create a new key at ${API_KEYS_URL}`
+          : 'hearthis.at did not accept HEARTHIS_KEY / HEARTHIS_SECRET. Run "npx hearthis-mcp login" to get a fresh pair.',
         401,
         'invalid_credentials',
       );
     }
+    // /oauth/userinfo/ names the profile address "username" and the display name "name"
+    const token = this.credentials.kind === 'token';
     const value: Account = {
       id: Number(data.id),
-      permalink: String(data.permalink ?? ''),
-      username: String(data.username ?? ''),
+      permalink: String((token ? data.username : data.permalink) ?? ''),
+      username: String((token ? data.name : data.username) ?? ''),
       premium: data.premium === true,
+      ...(token ? { scopes: String(data.scope ?? '').split(/\s+/).filter(Boolean) } : {}),
     };
     this.account = { value, at: Date.now() };
     return value;
   }
 
   async ensurePremium(): Promise<Account> {
-    if (!this.configured) {
-      throw new ApiError(
-        'HEARTHIS_KEY and HEARTHIS_SECRET are not set. Run "npx hearthis-mcp login" and add the pair to the MCP client configuration.',
-        401,
-        'not_configured',
-      );
+    if (this.credentials.kind === 'none') {
+      throw new ApiError(this.credentials.reason, 401, 'not_configured');
     }
     const account = await this.whoami();
     if (!account.premium) {
@@ -126,11 +168,35 @@ export class HearthisClient {
     return account;
   }
 
+  /** Refuses a tool the personal API key cannot use, before any request - with what to do about it. */
+  ensureAccess(access: Access, account: Account): void {
+    if (this.credentials.kind !== 'token' || access === 'read') {
+      return;
+    }
+    if (access === 'pair') {
+      throw notForApiKeys();
+    }
+    if (!account.scopes?.includes(access)) {
+      throw missingScope(access);
+    }
+  }
+
+  private pair(): Params {
+    return this.credentials.kind === 'pair' ? { key: this.credentials.key, secret: this.credentials.secret } : {};
+  }
+
+  private secrets(): string[] {
+    return this.credentials.kind === 'pair' ? [this.credentials.secret, this.credentials.key] : this.credentials.kind === 'token' ? [this.credentials.token] : [];
+  }
+
   private async send(url: URL, init: RequestInit, timeout = TIMEOUT_MS, attempt = 0): Promise<unknown> {
     const signal = anySignal([timeout > 0 ? AbortSignal.timeout(timeout) : undefined, requestContext.getStore()?.signal]);
-    const request = (target: URL, method: string | undefined, body: RequestInit['body']) =>
-      fetch(target, { method, body, headers: { 'User-Agent': this.userAgent, Accept: 'application/json' }, signal, redirect: 'manual' });
-    // Redirects only within the same host - the credentials travel in the query and the body
+    const headers: Record<string, string> = { 'User-Agent': this.userAgent, Accept: 'application/json' };
+    if (this.credentials.kind === 'token') {
+      headers.Authorization = `Bearer ${this.credentials.token}`;
+    }
+    const request = (target: URL, method: string | undefined, body: RequestInit['body']) => fetch(target, { method, body, headers, signal, redirect: 'manual' });
+    // Redirects only within the same host - the credentials travel in the header, the query and the body
     let response = await request(url, init.method, init.body);
     for (let hop = 0; hop < MAX_REDIRECTS && [301, 302, 303, 307, 308].includes(response.status); hop++) {
       const location = response.headers.get('location');
@@ -167,6 +233,19 @@ export class HearthisClient {
       this.account = null;
       throw premiumRequired();
     }
+    // The answers to a personal API key (RFC 6750): unknown or revoked, a right it does not hold, a part no key may use
+    if (this.credentials.kind === 'token' && (response.status === 401 || response.status === 403) && typeof body.error === 'string') {
+      if (body.error === 'invalid_token') {
+        this.account = null;
+        throw new ApiError(`hearthis.at did not accept HEARTHIS_API_KEY - it is unknown, expired or was revoked. Create a new key at ${API_KEYS_URL}`, 401, 'invalid_credentials');
+      }
+      if (body.error === 'insufficient_scope') {
+        throw missingScope(typeof body.scope === 'string' ? body.scope : '');
+      }
+      if (body.error === 'not_available') {
+        throw notForApiKeys();
+      }
+    }
     if (response.ok && typeof data === 'string' && /^\s*</.test(data)) {
       throw new ApiError('hearthis.at answered with a web page instead of data - the item probably does not exist.', 404, 'not_found');
     }
@@ -187,6 +266,27 @@ export function premiumRequired(): ApiError {
     'The hearthis.at MCP server is available for Premium members only. Upgrade at https://hearthis.at/premium/',
     403,
     'premium_required',
+  );
+}
+
+const SCOPE_NAMES: Record<string, string> = { read: 'Read', social: 'Likes, follows and comments', write: 'Upload and edit', messages: 'Messages' };
+
+export function missingScope(scope: string): ApiError {
+  const name = SCOPE_NAMES[scope];
+  return new ApiError(
+    `The hearthis.at API key of this server does not hold the right ${name ? `"${name}" (${scope})` : 'this needs'}. ` +
+      `A key cannot be changed: the user creates a new one with that right at ${API_KEYS_URL} and puts it into the MCP client configuration.`,
+    403,
+    'insufficient_scope',
+  );
+}
+
+export function notForApiKeys(): ApiError {
+  return new ApiError(
+    'Not open to a hearthis.at API key: deleting a conversation needs the sign-in with ' +
+      'e-mail and password ("npx hearthis-mcp login", HEARTHIS_KEY and HEARTHIS_SECRET).',
+    403,
+    'not_available',
   );
 }
 

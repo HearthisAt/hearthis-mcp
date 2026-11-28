@@ -1,6 +1,6 @@
 import type { McpServer, ServerContext, ToolAnnotations } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { ApiError, authorSegment, compactTracks, type HearthisClient, type Params, redact, requestContext, segment, toText, XHR_BASE } from './client.js';
+import { type Access, ApiError, authorSegment, compactTracks, type HearthisClient, type Params, redact, requestContext, segment, toText, XHR_BASE } from './client.js';
 
 type Shape = z.ZodRawShape;
 
@@ -10,6 +10,8 @@ interface ToolDef<S extends Shape> {
   input: S;
   /** add: only adds (comment, message, entry); write: overwrites, undoes or publishes; destructive: deletes */
   kind: 'read' | 'add' | 'write' | 'destructive';
+  /** what a personal API key needs for it: a scope, or 'pair' where no key may go (default read) */
+  access?: Exclude<Access, 'read'>;
   /** keep full track objects (single-track answers) */
   full?: boolean;
   run: (args: z.infer<z.ZodObject<S>>) => Promise<unknown>;
@@ -40,6 +42,10 @@ const PROGRESS_EVERY_MS = 10_000;
 
 export function registerTools(server: McpServer, api: HearthisClient): void {
   const tool = <S extends Shape>(name: string, def: ToolDef<S>) => {
+    // A personal API key never reaches these: not offered, so a model does not plan with them
+    if (def.access === 'pair' && api.mode === 'token') {
+      return;
+    }
     server.registerTool(
       name,
       { title: def.title, description: def.description, inputSchema: z.object(def.input), annotations: { title: def.title, ...ANNOTATIONS[def.kind] } },
@@ -55,7 +61,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
             : undefined;
         try {
           return await requestContext.run({ signal: ctx.mcpReq.signal }, async () => {
-            await api.ensurePremium();
+            api.ensureAccess(def.access ?? 'read', await api.ensurePremium());
             const data = await def.run(args);
             return { content: [{ type: 'text' as const, text: api.scrub(toText(redact(def.full ? data : compactTracks(data)))) }] };
           });
@@ -73,10 +79,42 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
 
   tool('whoami', {
     title: 'Who am I',
-    description: 'The hearthis.at account this server acts as: id, permalink, name, counts and Premium state.',
+    description:
+      'The hearthis.at account this server acts as: id, permalink, name, counts and Premium state. Signed in with a personal API key: ' +
+      'id, permalink, name, Premium state and the rights of the key (scopes: read, social, write).',
     input: {},
     kind: 'read',
-    run: () => api.get('/login/'),
+    // With a key the same names as with the pair: /oauth/userinfo/ calls the profile address "username"
+    run: async () => (api.mode === 'token' ? { ...(await api.whoami(true)), signed_in_with: 'api_key' } : api.profile()),
+  });
+
+  tool('get_account_stats', {
+    title: 'Account statistics',
+    description:
+      'Statistics of the account over the last 7, 28 (default), 90 or 365 days: totals and numbers per day (plays, embedded plays, ' +
+      'downloads, likes, comments, followers) and the top tracks; with a paid plan also countries, cities, sources and referring ' +
+      'sites (locked: true without one). Up to ten minutes old. One track: get_track_stats.',
+    input: { days: z.union([z.literal(7), z.literal(28), z.literal(90), z.literal(365)]).optional().describe('Period in days: 7, 28, 90 or 365') },
+    kind: 'read',
+    full: true,
+    run: ({ days }) => api.get('/my/stats/', { days }),
+  });
+
+  tool('get_faq', {
+    title: 'hearthis.at FAQ',
+    description:
+      'The FAQ of hearthis.at: how the site works, limits, Premium, uploads, formats, livestreams, payments, account. With query: the ' +
+      'questions that answer it best, with their answers. With id (from an earlier result): one question with its answer. With neither: ' +
+      'the topics and all questions, without answers. Look here before answering a question about hearthis.at itself; limits named in ' +
+      'an answer are those of a free account. Every result carries the address of the question on https://hearthis.at/faq/.',
+    input: {
+      query: z.string().min(2).max(100).optional().describe('Search words, in the language of lang'),
+      id: z.string().min(1).max(80).optional().describe('One question: its id from a list or a search, e.g. "70"'),
+      lang: z.enum(['en', 'de', 'fr', 'es', 'it', 'pt', 'nl', 'sw', 'pl', 'cs']).default('en').describe('Language of questions and answers'),
+      count: z.number().int().min(1).max(20).default(5).describe('With query: how many answers at most'),
+    },
+    kind: 'read',
+    run: ({ query, id, lang, count: hits }) => api.get('/app/faq/', id ? { lang, id } : query ? { lang, q: query, count: hits } : { lang }),
   });
 
   tool('get_feed', {
@@ -189,6 +227,18 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     run: ({ author: a, track: t }) => api.get(trackPath(a, t)),
   });
 
+  tool('get_track_stats', {
+    title: 'Track statistics',
+    description:
+      'Statistics of an own track, the numbers of its statistics dialog: plays, embedded plays and downloads per day, and - unless ' +
+      'locked (a free account) - sources, countries, cities, referring sites, download countries and the listening curve. Only for ' +
+      'tracks of the account itself; any other track answers not found. The whole account: get_account_stats.',
+    input: { author, track },
+    kind: 'read',
+    full: true,
+    run: ({ author: a, track: t }) => api.get(trackPath(a, t, 'stats')),
+  });
+
   tool('get_track_part', {
     title: 'Track part',
     description:
@@ -204,6 +254,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Likes a track, or removes the like when it is already liked. The answer says the new state.',
     input: { author, track },
     kind: 'write',
+    access: 'social',
     run: ({ author: a, track: t }) => api.get(trackPath(a, t, 'like')),
   });
 
@@ -212,6 +263,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Reposts a track to the account\'s followers, or takes the repost back when it already exists.',
     input: { author, track },
     kind: 'write',
+    access: 'social',
     run: ({ author: a, track: t }) => api.get(trackPath(a, t, 'reshare')),
   });
 
@@ -220,6 +272,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Saves a track of someone else to Listen later (on=true), removes it (on=false), or toggles (on omitted).',
     input: { author, track, on: flag },
     kind: 'write',
+    access: 'social',
     run: ({ author: a, track: t, on }) => api.get(trackPath(a, t, 'later'), { on: bit(on) }),
   });
 
@@ -242,6 +295,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       parent: z.number().int().optional().describe('Id of the comment this replies to'),
     },
     kind: 'add',
+    access: 'social',
     run: ({ author: a, track: t, comment, position, parent }) =>
       api.post(trackPath(a, t, 'comment'), { comment, comment_position: position, parent }),
   });
@@ -251,6 +305,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Deletes a comment of the account (or any comment on an own track).',
     input: { author, track, comment_id: z.number().int() },
     kind: 'destructive',
+    access: 'social',
     run: ({ author: a, track: t, comment_id }) => api.post(trackPath(a, t, 'comment'), { action: 'delete', id: comment_id }),
   });
 
@@ -264,6 +319,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       position: z.number().int().min(0).describe('Position in the track in seconds'),
     },
     kind: 'add',
+    access: 'social',
     run: ({ author: a, track: t, reaction, position }) => api.post(trackPath(a, t, 'reaction'), { reaction, reaction_position: position }),
   });
 
@@ -282,6 +338,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Copies the cover or background image of another own track onto this own track.',
     input: { author, track, from_track_id: z.number().int(), kind: z.enum(['cover', 'background']) },
     kind: 'write',
+    access: 'write',
     run: ({ author: a, track: t, from_track_id, kind }) => api.get(trackPath(a, t, 'copyimage'), { from: from_track_id, kind }),
   });
 
@@ -306,6 +363,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       cover_path: z.string().optional().describe('Absolute path of a JPG or PNG cover, max 10 MB'),
     },
     kind: 'write',
+    access: 'write',
     run: ({ file_path, cover_path, private: priv, downloadable, comments, ...meta }) =>
       api.postFiles(
         '/upload_api.php',
@@ -377,6 +435,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
         .describe('The whole list of control tags of the sound, e.g. ["+radio", "+promo"] - only the owner sees them, they steer workflows; replaces the list, [] clears it. Premium only. Setting one starts the workflows with the trigger "tagged"'),
     },
     kind: 'write',
+    access: 'write',
     run: (args) =>
       api.post(
         '/track_edit_api.php',
@@ -393,6 +452,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Deletes an own track. Ask the user for confirmation first.',
     input: { track_id: z.number().int() },
     kind: 'destructive',
+    access: 'write',
     run: ({ track_id }) => api.post('/track_edit_api.php', { track_id, action: 'delete' }, {}, XHR_BASE),
   });
 
@@ -401,6 +461,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Sets or replaces the cover of an own track from a local JPG or PNG (max 10 MB).',
     input: { track_id: z.number().int(), image_path: z.string().min(1).describe('Absolute path of the image') },
     kind: 'write',
+    access: 'write',
     run: ({ track_id, image_path }) => api.postFiles('/track_image_api.php', { track_id }, { image: { path: image_path, kind: 'image' } }),
   });
 
@@ -409,6 +470,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Removes the cover of an own track.',
     input: { track_id: z.number().int() },
     kind: 'destructive',
+    access: 'write',
     run: ({ track_id }) => api.post('/track_image_api.php', { track_id, action: 'delete' }, {}, XHR_BASE),
   });
 
@@ -432,6 +494,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Follows a user, or unfollows when the account already follows them. User id from get_user.',
     input: { user_id: z.number().int() },
     kind: 'write',
+    access: 'social',
     run: ({ user_id }) => api.post('/user_ajax_function.php', { userid: user_id, action: 'follow' }),
   });
 
@@ -440,8 +503,9 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Shows badges on the profile (badges_public) and the weekly mail about new badges (email_badges). Only the fields given change.',
     input: { badges_public: flag, email_badges: flag },
     kind: 'write',
+    access: 'write',
     run: ({ badges_public, email_badges }) =>
-      api.post('/user_ajax_options.php', { action: 'badges', badges_public: bit(badges_public), email_badges: bit(email_badges) }),
+      api.post('/my/badges/', { badges_public: bit(badges_public), email_badges: bit(email_badges) }),
   });
 
   tool('get_fan_subscriptions', {
@@ -475,6 +539,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Adds a track to an existing set (set_id), or creates a new set with that name (new_set_name).',
     input: { track_id: z.number().int(), set_id: z.number().int().optional(), new_set_name: z.string().optional() },
     kind: 'add',
+    access: 'write',
     run: async ({ track_id, set_id, new_set_name }) => {
       if (!set_id && !new_set_name) {
         throw new ApiError('Give set_id or new_set_name.', 400);
@@ -499,6 +564,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       sort: z.enum(['manual', 'alpha', 'random', 'plays']).optional(),
     },
     kind: 'write',
+    access: 'write',
     run: ({ set_id, permalink, genre, private: priv, open, sort, ...rest }) =>
       api.post('/set_ajax_edit.php', {
         ...rest,
@@ -546,6 +612,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       highlight: z.string().regex(/^[0-9a-fA-F]{6}$/).optional().describe('Hex colour without # (Premium)'),
     },
     kind: 'write',
+    access: 'write',
     run: ({ name, caption, track_footer, genres, links, facebook, twitter, support_url, place, is_group, featured_track_id, ...rest }) => {
       const params: Params = {
         action: 'profile',
@@ -579,7 +646,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
         params.gp_urls = links.map((link) => link.url.replace(/\s+/g, '')).join('\n');
         params.gp_urls_names = links.map((link) => (link.title ?? '').replace(/\s+/g, ' ').trim()).join('\n');
       }
-      return api.post('/user_ajax_edit.php', params);
+      return api.post('/my/profile/', params);
     },
   });
 
@@ -588,6 +655,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Removes a track from a set of the account.',
     input: { set_id: z.number().int(), track_id: z.number().int() },
     kind: 'destructive',
+    access: 'write',
     run: async ({ set_id, track_id }) => {
       // reply=status: {ok:true} only when the track was in the set and the account may remove it - without it a refusal is an empty 200
       const answer = (await api.post('/set_ajax_edit.php', { action: 'deleteentry', set_id, id: track_id, reply: 'status' })) as { ok?: boolean } | null;
@@ -603,6 +671,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Deletes a set of the account (the tracks stay). Ask the user for confirmation first.',
     input: { set_id: z.number().int() },
     kind: 'destructive',
+    access: 'write',
     run: ({ set_id }) => api.post('/set_ajax_edit.php', { action: 'delete', set: set_id }),
   });
 
@@ -642,6 +711,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       sort: z.enum(['manual', 'alpha', 'random', 'plays']).optional(),
     },
     kind: 'add',
+    access: 'write',
     run: ({ name, description, genre, private: priv, sort }) =>
       api.post(
         '/groups/',
@@ -672,6 +742,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       allowed_genres: z.array(z.string().min(1)).optional().describe('Genre slugs (list_genres) members may add - replaces the list; [] accepts every genre again'),
     },
     kind: 'write',
+    access: 'write',
     run: ({ group_id, permalink, genre, private: priv, open, approve, notify, member_notify, sort, editors, allowed_genres, ...rest }) =>
       api.post(`/group/${segment(group_id)}/edit/`, {
         ...rest,
@@ -693,6 +764,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Joins a group (join=true) or leaves it (join=false). The owner cannot leave. A private group can only be joined with its invitation link.',
     input: { group_id: z.number().int(), join: z.boolean(), invite },
     kind: 'write',
+    access: 'social',
     run: ({ group_id, join, invite: link }) => api.post(`/group/${segment(group_id)}/${join ? 'join' : 'leave'}/`, { s: join ? inviteSecret(link) : undefined }),
   });
 
@@ -701,6 +773,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Adds a track to a group (add=true) or removes it (add=false). Owner, editors and the sound\'s author are published at once; others wait while the group asks for approval. A group limited to genres refuses a member\'s sound of another genre (403, the answer names allowed_genres). Adding notifies the members and may mail the owner.',
     input: { group_id: z.number().int(), track_id: z.number().int(), add: z.boolean() },
     kind: 'write',
+    access: 'write',
     run: ({ group_id, track_id, add }) => api.post(`/group/${segment(group_id)}/${add ? 'add' : 'remove'}/`, { track_id }),
   });
 
@@ -709,6 +782,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Owner only: makes a member an editor or a plain member, or blocks them (use group_block to lift a block).',
     input: { group_id: z.number().int(), user_id: z.number().int(), role: z.enum(['member', 'editor', 'blocked']) },
     kind: 'write',
+    access: 'write',
     run: ({ group_id, user_id, role }) =>
       api.post(`/group/${segment(group_id)}/permissions/`, { user_id, rights: { member: 0, editor: 5, blocked: -1 }[role] }),
   });
@@ -718,6 +792,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Owner and editors: blocks a user from a group (they leave it and cannot join or add) or lifts the block.',
     input: { group_id: z.number().int(), user_id: z.number().int(), block: z.boolean() },
     kind: 'write',
+    access: 'write',
     run: ({ group_id, user_id, block }) => api.post(`/group/${segment(group_id)}/${block ? 'block' : 'unblock'}/`, { user_id }),
   });
 
@@ -726,6 +801,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Owner and editors: publishes a sound that waits for approval; the members are told about it.',
     input: { group_id: z.number().int(), track_id: z.number().int() },
     kind: 'add',
+    access: 'write',
     run: ({ group_id, track_id }) => api.post(`/group/${segment(group_id)}/approve/`, { track_id }),
   });
 
@@ -734,6 +810,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Owner only: deletes a group. Ask the user for confirmation first.',
     input: { group_id: z.number().int() },
     kind: 'destructive',
+    access: 'write',
     run: ({ group_id }) => api.post(`/group/${segment(group_id)}/delete/`),
   });
 
@@ -744,6 +821,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Direct-message conversations of the account, most recent first, with unread counts.',
     input: {},
     kind: 'read',
+    access: 'messages',
     run: () => api.get('/messages/'),
   });
 
@@ -757,6 +835,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       mark_read: z.boolean().default(false),
     },
     kind: 'add',
+    access: 'messages',
     run: ({ user_id, mark_read, ...rest }) => api.get(`/messages/${segment(user_id)}/`, { ...rest, mark_read: bit(mark_read) }),
   });
 
@@ -765,6 +844,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Incoming messages with an id above since (max 100). Without since only the current cursor comes back. Marks nothing as read.',
     input: { since: z.number().int().min(0).optional() },
     kind: 'read',
+    access: 'messages',
     run: (args) => api.get('/messages/poll/', args),
   });
 
@@ -773,6 +853,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Sends a direct message (max 2000 characters) to a user. Only send what the user asked to send.',
     input: { user_id: z.number().int(), message: z.string().min(1).max(2000) },
     kind: 'add',
+    access: 'messages',
     run: ({ user_id, message }) => api.post(`/messages/${segment(user_id)}/`, { message }),
   });
 
@@ -781,6 +862,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Deletes a whole conversation for both sides. Ask the user for confirmation first.',
     input: { user_id: z.number().int() },
     kind: 'destructive',
+    access: 'pair',
     run: ({ user_id }) => api.post(`/messages/${segment(user_id)}/delete/`),
   });
   // Workflows: rules that act on the own sounds by themselves (https://hearthis.at/workflows/, Premium)
@@ -816,6 +898,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'The workflows of the account in their order, each with state (off, log = test run, on), version and its rule (trigger, conditions, actions).',
     input: {},
     kind: 'read',
+    access: 'write',
     run: () => api.get('/my/workflows/'),
   });
 
@@ -826,6 +909,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       'user: workflows do the routine work on their uploads by rule.',
     input: { name: z.string().min(1).max(80), state: state.default('off'), definition },
     kind: 'write',
+    access: 'write',
     run: ({ name, state: value, definition: rule }) => api.post('/my/workflows/', { name, state: value, definition: json(rule) }),
   });
 
@@ -835,6 +919,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       'or changing its trigger makes it act on uploads from then on.',
     input: { workflow_id: id, name: z.string().min(1).max(80).optional(), state: state.optional(), definition: definition.optional() },
     kind: 'write',
+    access: 'write',
     run: ({ workflow_id, name, state: value, definition: rule }) => api.post(`/my/workflows/${workflow_id}/`, { name, state: value, definition: json(rule) }),
   });
 
@@ -843,6 +928,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Deletes a workflow. What it did stays in the history and can still be undone. Ask the user for confirmation first.',
     input: { workflow_id: id },
     kind: 'destructive',
+    access: 'write',
     run: ({ workflow_id }) => api.post(`/my/workflows/${workflow_id}/delete/`),
   });
 
@@ -854,6 +940,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       'a dot and the body. The secret itself never comes through this server: the user copies it under Webhooks on https://hearthis.at/workflows/.',
     input: { action: z.enum(['show', 'renew', 'test']), url: z.string().url().startsWith('https://').max(500).optional().describe('For test') },
     kind: 'write',
+    access: 'write',
     run: ({ action, url }) => {
       if (action === 'test' && !url) {
         throw new ApiError('test needs url.', 400, 'invalid');
@@ -872,6 +959,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Sets the order the workflows run in on a sound - the ids given first, in that order, the others behind them. Matters for stop.',
     input: { workflow_ids: z.array(id).min(1).max(20) },
     kind: 'write',
+    access: 'write',
     run: ({ workflow_ids }) => api.post('/my/workflows/order/', { ids: workflow_ids.join(',') }),
   });
 
@@ -887,6 +975,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       before: z.number().int().min(0).optional().describe('The next of the previous answer'),
     },
     kind: 'read',
+    access: 'write',
     run: ({ workflow_id, definition: rule, track_id, before }) => {
       if (!workflow_id === !rule) {
         throw new ApiError('Give either workflow_id (a saved workflow) or definition (a draft).', 400, 'invalid');
@@ -902,6 +991,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       'follow it with get_workflow_run. Tell the user what test_workflow showed and ask before applying it to all sounds.',
     input: { workflow_id: id, track_ids: z.array(z.number().int().positive()).min(1).max(10000).optional().describe('Leave out for all sounds') },
     kind: 'write',
+    access: 'write',
     run: ({ workflow_id, track_ids }) => api.post(`/my/workflows/${workflow_id}/apply/`, { track_ids: track_ids?.join(',') }),
   });
 
@@ -910,6 +1000,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'A run of apply_workflow or undo_workflow with its progress (done of total, applied, skipped, failed) - or, without run_id, the recent runs.',
     input: { run_id: id.optional() },
     kind: 'read',
+    access: 'write',
     run: ({ run_id }) => api.get(run_id ? `/my/workflows/runs/${run_id}/` : '/my/workflows/runs/'),
   });
 
@@ -918,6 +1009,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Stops an open run. What it changed so far stays - undo it with undo_workflow and the run_id.',
     input: { run_id: id },
     kind: 'write',
+    access: 'write',
     run: ({ run_id }) => api.post(`/my/workflows/runs/${run_id}/cancel/`),
   });
 
@@ -932,6 +1024,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       before: z.number().int().min(0).optional(),
     },
     kind: 'read',
+    access: 'write',
     run: ({ workflow_id, track_id, run_id, before }) => api.get('/my/workflows/log/', { rule_id: workflow_id, track_id, run_id, before }),
   });
 
@@ -941,6 +1034,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       'what is still as the workflow left it - a value the user changed since stays. Emails cannot be taken back.',
     input: { entry_id: id.optional(), run_id: id.optional() },
     kind: 'write',
+    access: 'write',
     run: ({ entry_id, run_id }) => {
       if (!entry_id === !run_id) {
         throw new ApiError('Give either entry_id or run_id.', 400, 'invalid');
@@ -954,6 +1048,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'The control tags of the account (+name, only the owner sees them) with how many sounds carry each, plus the ones the workflows name. q filters by the start, e.g. "+ra".',
     input: { q: z.string().max(20).optional() },
     kind: 'read',
+    access: 'write',
     run: ({ q }) => api.get('/my/control-tags/', { q }),
   });
 
@@ -965,6 +1060,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       'description follows the feed unless the user changed it on hearthis.at. With feed_id one feed and its latest episodes.',
     input: { feed_id: feedId.optional() },
     kind: 'read',
+    access: 'write',
     run: ({ feed_id }) => api.get(feed_id ? `/my/feeds/${feed_id}/` : '/my/feeds/'),
   });
 
@@ -975,6 +1071,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
       'Imported episodes are public unless private - ask before adding a feed with start "all".',
     input: { url: z.string().url().max(500), private: z.boolean().optional(), start: z.enum(['new', 'all']).optional() },
     kind: 'write',
+    access: 'write',
     run: ({ url, private: bolPrivate, start }) => api.post('/my/feeds/', { url, private: bit(bolPrivate), start }),
   });
 
@@ -983,6 +1080,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'private: new episodes come in private; paused: true pauses the sync, false resumes it (also after errors).',
     input: { feed_id: feedId, private: z.boolean().optional(), paused: z.boolean().optional() },
     kind: 'write',
+    access: 'write',
     run: ({ feed_id, private: bolPrivate, paused }) => api.post(`/my/feeds/${feed_id}/`, {
       private: bit(bolPrivate), paused: bit(paused),
     }),
@@ -993,6 +1091,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Looks at a synced feed now: notes new episodes and changed titles or descriptions; the episodes themselves come in with the next runs (every 5 minutes). Once every 5 minutes per feed.',
     input: { feed_id: feedId },
     kind: 'write',
+    access: 'write',
     run: ({ feed_id }) => api.post(`/my/feeds/${feed_id}/check/`),
   });
 
@@ -1001,6 +1100,7 @@ export function registerTools(server: McpServer, api: HearthisClient): void {
     description: 'Stops keeping the feed in sync. The sounds it brought stay.',
     input: { feed_id: feedId },
     kind: 'destructive',
+    access: 'write',
     run: ({ feed_id }) => api.post(`/my/feeds/${feed_id}/delete/`),
   });
 }
